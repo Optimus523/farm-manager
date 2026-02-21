@@ -204,11 +204,40 @@ class GeminiContentGenerator implements ContentGenerator {
         // Handle SDK parsing errors (like MALFORMED_FUNCTION_CALL from thinking models)
         if (errorStr.contains('MALFORMED_FUNCTION_CALL') ||
             errorStr.contains('Unhandled format')) {
-          debugPrint('SDK parsing error, asking for text-only response: $e');
-          // Retry asking for a plain text response that actually answers the question
+          debugPrint(
+            'SDK parsing error, asking model to retry with correct format: $e',
+          );
+          // Retry asking the model to regenerate the response with proper function call format
           response = await _chatSession.sendMessage(
             google_ai.Content.text(
-              'There was an error with the function call. Please answer my original question using plain text. If I asked about an animal, describe it in text format.',
+              '''There was a malformed function call error. Please retry with the EXACT correct format.
+
+CRITICAL: Use render_farm with this exact JSON structure:
+{
+  "surfaceId": "unique_id",
+  "components": [{
+    "id": "comp_1",
+    "component": {
+      "TOOL_NAME": { ...parameters... }
+    }
+  }]
+}
+
+For example, for generateReport:
+{
+  "surfaceId": "report_123",
+  "components": [{
+    "id": "comp_1",
+    "component": {
+      "generateReport": {
+        "reportType": "inventory",
+        "format": "pdf"
+      }
+    }
+  }]
+}
+
+Now please answer the original question: $text''',
             ),
           );
         } else {
@@ -236,6 +265,12 @@ class GeminiContentGenerator implements ContentGenerator {
           'create_reminder',
           'show_animal',
           'log_feeding',
+          'generateReport',
+          'generate_report',
+          'showHealthRecord',
+          'show_health_record',
+          'generateInviteCode',
+          'generate_invite_code',
         ];
         final normalizedCallName = call.name.replaceAll('_', '').toLowerCase();
         final matchedComponent = knownComponents.firstWhere(
@@ -258,6 +293,15 @@ class GeminiContentGenerator implements ContentGenerator {
               break;
             case 'logfeeding':
               componentName = 'logFeeding';
+              break;
+            case 'generatereport':
+              componentName = 'generateReport';
+              break;
+            case 'showhealthrecord':
+              componentName = 'showHealthRecord';
+              break;
+            case 'generateinvitecode':
+              componentName = 'generateInviteCode';
               break;
             default:
               componentName = matchedComponent;

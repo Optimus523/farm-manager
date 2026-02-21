@@ -4,11 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:genui/genui.dart';
+import 'package:intl/intl.dart';
 import 'package:manage/config/genui_catalog.dart';
 import 'package:manage/config/theme.dart';
 import 'package:manage/models/animal.dart';
+import 'package:manage/models/health_record.dart';
 import 'package:manage/providers/auth_providers.dart';
 import 'package:manage/providers/providers.dart';
+import 'package:manage/services/assistant_data_service.dart';
 import 'package:manage/services/gemini_content_generator.dart';
 import 'package:manage/services/memory_service.dart';
 import 'package:manage/utils/env_helper.dart';
@@ -60,16 +63,21 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
         final user = ref.read(currentUserProvider).value;
         if (user != null) {
           _userContainerTag = _memoryService!.getContainerTag(user.id);
+          debugPrint('Memory container tag: $_userContainerTag');
 
           // Fetch the user's memory profile to inject into the system prompt
+          // Search for general preferences and tool usage patterns
           final searchResponse = await _memoryService!
               .searchMemories(
                 containerTag: _userContainerTag!,
-                query: 'farm management preferences context',
-                limit: 10,
-                threshold: 0.5,
+                query:
+                    'farm management preferences context tools health animals reminders',
+                limit: 15,
+                threshold: 0.4, // Lowered for better recall
               )
-              .timeout(const Duration(seconds: 5));
+              .timeout(
+                const Duration(seconds: 15),
+              ); // Increased from 5s - embeddings can be slow
 
           if (searchResponse.hasResults) {
             final memories = searchResponse.results
@@ -86,7 +94,13 @@ $memories
             debugPrint(
               'Loaded ${searchResponse.results.length} memories for assistant context',
             );
+          } else {
+            debugPrint(
+              'No memories found for user (container: $_userContainerTag)',
+            );
           }
+        } else {
+          debugPrint('No user logged in, skipping memory initialization');
         }
       } catch (e) {
         // Memory API unavailable — continue without memory
@@ -134,6 +148,111 @@ CRITICAL: When the user asks about an animal by name or tag ID, you MUST search 
             '\nThe user has no animals registered in their farm yet.';
       }
 
+      // Build context about health records
+      String healthContext = "";
+      try {
+        final dataService = ref.read(assistantDataServiceProvider);
+        // Wait for health records to load before building context
+        final healthRecords = await dataService.waitForHealthRecords(
+          timeout: const Duration(seconds: 8), // Increased timeout
+        );
+        debugPrint(
+          'Loaded ${healthRecords.length} health records for assistant context',
+        );
+
+        final healthStats = dataService.getHealthStats();
+        final upcomingVaccinations = dataService.getUpcomingVaccinations();
+        final overdueVaccinations = dataService.getOverdueVaccinations();
+        final animalsInWithdrawal = dataService.getAnimalsInWithdrawal();
+        final pendingFollowUps = dataService.getPendingFollowUps();
+
+        if (healthRecords.isNotEmpty || healthStats['totalRecords'] > 0) {
+          final recentRecordsList = healthRecords
+              .take(10)
+              .map((r) {
+                final dateStr = r.date.toIso8601String().split('T')[0];
+                return "- [${r.type.displayName}] ${r.title} (Animal: ${r.animalTagId ?? 'N/A'}, Date: $dateStr, Status: ${r.status.name})";
+              })
+              .join('\n');
+
+          final upcomingVaxList = upcomingVaccinations
+              .take(5)
+              .map((r) {
+                final dueDate =
+                    r.nextDueDate?.toIso8601String().split('T')[0] ?? 'N/A';
+                return "- ${r.vaccineName ?? r.title} for ${r.animalTagId ?? 'N/A'}, due: $dueDate";
+              })
+              .join('\n');
+
+          final overdueVaxList = overdueVaccinations
+              .take(5)
+              .map((r) {
+                final dueDate =
+                    r.nextDueDate?.toIso8601String().split('T')[0] ?? 'N/A';
+                return "- ${r.vaccineName ?? r.title} for ${r.animalTagId ?? 'N/A'}, was due: $dueDate";
+              })
+              .join('\n');
+
+          final withdrawalList = animalsInWithdrawal
+              .take(5)
+              .map((r) {
+                final endDate =
+                    r.withdrawalEndDate?.toIso8601String().split('T')[0] ??
+                    'N/A';
+                return "- ${r.animalTagId ?? 'N/A'}: ${r.medicationName ?? r.title}, withdrawal ends: $endDate";
+              })
+              .join('\n');
+
+          final followUpList = pendingFollowUps
+              .take(5)
+              .map((r) {
+                final followDate =
+                    r.followUpDate?.toIso8601String().split('T')[0] ?? 'N/A';
+                return "- ${r.title} for ${r.animalTagId ?? 'N/A'}, was due: $followDate";
+              })
+              .join('\n');
+
+          healthContext =
+              '''
+
+=== ANIMAL HEALTH RECORDS ===
+Total health records: ${healthStats['totalRecords']}
+Records by type: ${healthStats['byType']}
+Upcoming vaccinations: ${upcomingVaccinations.length}
+Overdue vaccinations: ${overdueVaccinations.length}
+Animals in withdrawal period: ${animalsInWithdrawal.length}
+Pending follow-ups: ${pendingFollowUps.length}
+
+RECENT HEALTH RECORDS (last 10):
+$recentRecordsList
+
+${upcomingVaccinations.isNotEmpty ? 'UPCOMING VACCINATIONS:\n$upcomingVaxList\n' : ''}
+${overdueVaccinations.isNotEmpty ? 'OVERDUE VACCINATIONS (URGENT!):\n$overdueVaxList\n' : ''}
+${animalsInWithdrawal.isNotEmpty ? 'ANIMALS IN WITHDRAWAL PERIOD (cannot sell meat/milk):\n$withdrawalList\n' : ''}
+${pendingFollowUps.isNotEmpty ? 'PENDING FOLLOW-UPS:\n$followUpList\n' : ''}
+=== END HEALTH RECORDS ===
+
+When users ask about health records, vaccinations, medications, or animal health:
+- Use the health data above to provide accurate information
+- Use the showHealthRecord tool to display health record cards
+- Alert users about overdue vaccinations or pending follow-ups
+- Warn about animals in withdrawal period before they can be sold
+''';
+        } else {
+          healthContext =
+              '\nNo health records have been logged yet for this farm.';
+        }
+      } catch (e) {
+        debugPrint('Failed to load health records for assistant: $e');
+        healthContext = '\nHealth records are temporarily unavailable.';
+      }
+
+      // Generate tools context from catalog definitions
+      final toolsContext = generateToolsContext();
+
+      // Current date for context
+      final currentDate = DateFormat('MMMM d, yyyy').format(DateTime.now());
+
       final contentGenerator = GeminiContentGenerator(
         apiKey: _apiKey,
         modelName: 'gemini-2.5-flash',
@@ -142,91 +261,23 @@ CRITICAL: When the user asks about an animal by name or tag ID, you MUST search 
         additionalSystemPrompt:
             '''
 You are a helpful farm management assistant. You help farmers manage their livestock, track feeding schedules, monitor health records, manage reminders/notifications, and analyze farm data.
+
+IMPORTANT: Today's date is $currentDate. Use this year (${DateTime.now().year}) for all date-related requests.
+
 $animalContext
+$healthContext
 $memoryContext
-
-=== IMPORTANT: HOW TO USE TOOLS ===
-You have access to these specific tools via render_farm. Each tool renders a pre-built interactive widget.
-DO NOT try to build custom UI with Card/Button/Text components. Use ONLY these exact tool names:
-
-1. **showAnimal** - Display an animal card
-   Required: tagId, species
-   Optional: name, breed, status
-
-2. **logFeeding** - Show a feeding log form  
-   Required: animalId, feedType, quantity
-   Optional: date
-
-3. **createReminder** - Show a reminder creation form
-   Required: title
-   Optional: description, dueDate, daysFromNow, type, priority, animalTagId
-
-4. **createInviteCode** - Generate an invite code to add team members
-   Required: email (email address of the person to invite)
-   Optional: role (owner/manager/worker/vet, default worker), maxUses (default 1), validityDays (default 7)
-
-CORRECT TOOL CALL FORMAT:
-When calling render_farm, use this exact structure:
-{
-  "surfaceId": "unique_id_here",
-  "components": [
-    {
-      "id": "component_1",
-      "component": {
-        "createReminder": {
-          "title": "Vaccinate Maria",
-          "daysFromNow": 1,
-          "type": "health",
-          "priority": "high"
-        }
-      }
-    }
-  ]
-}
-
-WRONG FORMAT (DO NOT USE):
-- componentType: "Card" ❌
-- componentType: "Button" ❌  
-- componentType: "Text" ❌
-- children: [...] ❌
-
-The system will render the appropriate interactive form automatically.
-=== END TOOL INSTRUCTIONS ===
-
-=== REMINDER EXAMPLES ===
-User: "Remind me to vaccinate pig 123 tomorrow"
-→ Call render_farm with createReminder component: title="Vaccinate pig 123", daysFromNow=1, type="health"
-
-User: "Set a reminder for next week to check the goats"  
-→ Call render_farm with createReminder component: title="Check the goats", daysFromNow=7
-
-User: "Create an urgent reminder to order feed"
-→ Call render_farm with createReminder component: title="Order feed", priority="urgent"
-=== END EXAMPLES ===
-
-=== INVITE CODE EXAMPLES ===
-User: "Create an invite code for john@example.com as a worker"
-→ Call render_farm with createInviteCode component: email="john@example.com", role="worker"
-
-User: "Generate a manager invite code for sarah@farm.co"
-→ Call render_farm with createInviteCode component: email="sarah@farm.co", role="manager"
-
-User: "I need to invite mike@vet.com as a vet, valid for a month"
-→ Call render_farm with createInviteCode component: email="mike@vet.com", role="vet", validityDays=30
-
-User: "Create invite code" (no email specified)
-→ Show the form without pre-filling: Call render_farm with createInviteCode component: {}
-
-IMPORTANT: If user doesn't provide an email, still show the form - they can enter the email there.
-=== END INVITE CODE EXAMPLES ===
+$toolsContext
 
 RESPONSE GUIDELINES:
 1. When asked about an animal, search the ANIMAL LIST above carefully.
 2. For simple questions, respond with markdown text.
-3. For actions (create reminder, log feeding, show animal), use the render_farm tool with the appropriate component.
+3. For actions (create reminder, log feeding, log health, show animal), use the render_farm tool with the appropriate component.
 4. DO NOT ask for confirmation before showing the form - just show the form directly.
+5. If user doesn't provide all required fields, still show the form - they can complete it there.
+6. For date ranges like "January" or "last month", use the CURRENT YEAR (${DateTime.now().year}) unless user specifies otherwise.
 
-DO NOT say you cannot remember or don't have memory - you have all the animal data listed above!
+DO NOT say you cannot remember or don't have memory - you have all the animal and health data listed above!
 ''',
       );
 
@@ -305,11 +356,44 @@ DO NOT say you cannot remember or don't have memory - you have all the animal da
     final userMsg = _lastUserMessage!;
     _lastUserMessage = null;
 
+    // Build health context for better memory extraction
+    String healthContext = '';
+    try {
+      final dataService = ref.read(assistantDataServiceProvider);
+      final healthStats = dataService.getHealthStats();
+      final recentRecords = dataService.getRecentHealthRecords(limit: 5);
+
+      if (recentRecords.isNotEmpty) {
+        final recordSummary = recentRecords
+            .map(
+              (r) =>
+                  '${r.type.displayName}: ${r.title} for animal ${r.animalTagId ?? "unknown"}',
+            )
+            .join('; ');
+
+        healthContext =
+            '''
+Farm health context:
+- Total health records: ${healthStats['totalRecords']}
+- Records by type: ${healthStats['byType']}
+- Upcoming vaccinations: ${healthStats['upcomingVaccinationsCount']}
+- Overdue vaccinations: ${healthStats['overdueVaccinationsCount']}
+- Animals in withdrawal: ${healthStats['animalsInWithdrawalCount']}
+- Recent records: $recordSummary
+
+Categories for health memories: animal_health, vaccination, medication, treatment, checkup, surgery, observation, withdrawal_period, follow_up
+''';
+      }
+    } catch (e) {
+      debugPrint('Failed to build health context: $e');
+    }
+
     _memoryService!
         .storeConversation(
           containerTag: _userContainerTag!,
           userMessage: userMsg,
           assistantResponse: assistantResponse,
+          additionalContext: healthContext,
         )
         .then((_) {
           debugPrint('Conversation stored in memory');
@@ -333,7 +417,7 @@ DO NOT say you cannot remember or don't have memory - you have all the animal da
   @override
   void dispose() {
     _responseSubscription?.cancel();
-    _memoryService?.dispose();
+    // Don't dispose memory service - it's a singleton provider and will be reused
     _conversation?.dispose();
     _textController.dispose();
     super.dispose();

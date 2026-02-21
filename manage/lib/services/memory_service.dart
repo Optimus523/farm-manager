@@ -311,9 +311,10 @@ class MemoryService {
     required String containerTag,
     required String query,
     int limit = 10,
-    double threshold = 0.7,
+    double threshold = 0.4,  // Lowered from 0.7 - semantic similarity often ranges 0.4-0.7
   }) async {
     try {
+      debugPrint('Searching memories: container=$containerTag, query="${query.substring(0, query.length > 50 ? 50 : query.length)}...", threshold=$threshold');
       final response = await _client.post(
         Uri.parse('$baseUrl/search'),
         headers: {'Content-Type': 'application/json'},
@@ -326,7 +327,9 @@ class MemoryService {
       );
 
       if (response.statusCode == 200) {
-        return SearchMemoriesResponse.fromJson(jsonDecode(response.body));
+        final result = SearchMemoriesResponse.fromJson(jsonDecode(response.body));
+        debugPrint('Memory search returned ${result.results.length} results');
+        return result;
       } else {
         debugPrint('Search failed: ${response.statusCode} - ${response.body}');
         return SearchMemoriesResponse(
@@ -347,6 +350,7 @@ class MemoryService {
     String context = '',
   }) async {
     try {
+      debugPrint('Extracting memories for container: $containerTag');
       final response = await _client.post(
         Uri.parse('$baseUrl/extract'),
         headers: {'Content-Type': 'application/json'},
@@ -358,7 +362,9 @@ class MemoryService {
       );
 
       if (response.statusCode == 200) {
-        return ExtractMemoriesResponse.fromJson(jsonDecode(response.body));
+        final result = ExtractMemoriesResponse.fromJson(jsonDecode(response.body));
+        debugPrint('Extracted ${result.extractedCount} memories successfully');
+        return result;
       } else {
         debugPrint('Extract failed: ${response.statusCode} - ${response.body}');
         return ExtractMemoriesResponse(
@@ -397,13 +403,35 @@ Assistant: $assistantResponse
     );
   }
 
+  /// Note: This is a singleton service provided by Riverpod.
+  /// The HTTP client should not be closed as the service may be reused.
+  /// If you need to clean up, use ref.invalidate(memoryServiceProvider) instead.
   void dispose() {
+    // Don't close the client - this service is a singleton and may be reused
+    // _client.close();
+  }
+
+  /// Internal method to close client - only called on app shutdown
+  void _closeClient() {
     _client.close();
   }
 }
 
+// Singleton instance to ensure the HTTP client is never prematurely closed
+MemoryService? _memoryServiceInstance;
+
 final memoryServiceProvider = Provider<MemoryService>((ref) {
-  return MemoryService();
+  // Reuse the existing instance if available to prevent client closure issues
+  _memoryServiceInstance ??= MemoryService();
+
+  ref.onDispose(() {
+    // Only close when the provider itself is disposed (app shutdown)
+    // This should rarely happen in normal app usage
+    _memoryServiceInstance?._closeClient();
+    _memoryServiceInstance = null;
+  });
+
+  return _memoryServiceInstance!;
 });
 
 final userMemoryContextProvider =

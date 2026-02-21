@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import '../../models/models.dart';
+import '../../providers/auth_providers.dart';
 import '../../providers/providers.dart';
 import '../../repositories/financial_repository.dart';
+import '../../utils/currency_utils.dart';
 import '../../utils/seo_helper.dart';
 
 class FinancialReportsScreen extends ConsumerStatefulWidget {
@@ -18,6 +23,7 @@ class _FinancialReportsScreenState
     extends ConsumerState<FinancialReportsScreen> {
   int _selectedBudgetMonth = DateTime.now().month;
   int _selectedBudgetYear = DateTime.now().year;
+  bool _isDownloading = false;
 
   @override
   void initState() {
@@ -53,6 +59,27 @@ class _FinancialReportsScreenState
       appBar: AppBar(
         title: const Text('Financial Reports'),
         actions: [
+          IconButton(
+            icon: _isDownloading
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.download),
+            tooltip: 'Download PDF Report',
+            onPressed: _isDownloading
+                ? null
+                : () => _downloadDetailedReport(
+                    summaryAsync.value,
+                    topExpensesAsync.value,
+                    monthlySummariesAsync.value,
+                    dateRange,
+                  ),
+          ),
           IconButton(
             icon: const Icon(Icons.date_range),
             tooltip: 'Select Date Range',
@@ -1055,6 +1082,538 @@ class _FinancialReportsScreenState
     return category.isNotEmpty
         ? '${category[0].toUpperCase()}${category.substring(1)}'
         : category;
+  }
+
+  // ==================== PDF DOWNLOAD ====================
+
+  Future<void> _downloadDetailedReport(
+    FinancialSummary? summary,
+    Map<String, double>? topExpenses,
+    List<FinancialSummary>? monthlySummaries,
+    DateTimeRange dateRange,
+  ) async {
+    if (summary == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('No data to export')));
+      return;
+    }
+
+    setState(() => _isDownloading = true);
+
+    try {
+      final formatter = ref.read(currencyFormatterProvider);
+      final userAsync = ref.read(currentUserProvider);
+      final farmName = userAsync.value?.activeFarm?.farmName ?? 'Farm';
+
+      final pdf = pw.Document();
+      final dateFormat = DateFormat('MMM d, yyyy');
+
+      // Colors for charts
+      final chartColors = [
+        PdfColors.blue,
+        PdfColors.green,
+        PdfColors.orange,
+        PdfColors.purple,
+        PdfColors.red,
+        PdfColors.teal,
+        PdfColors.amber,
+        PdfColors.indigo,
+      ];
+
+      pdf.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(32),
+          header: (context) => _buildPdfHeader(farmName, 'Financial Report'),
+          footer: (context) => _buildPdfFooter(context),
+          build: (context) => [
+            // Period
+            pw.Text(
+              'Period: ${dateFormat.format(dateRange.start)} - ${dateFormat.format(dateRange.end)}',
+              style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700),
+            ),
+            pw.SizedBox(height: 20),
+
+            // Executive Summary Box
+            pw.Container(
+              padding: const pw.EdgeInsets.all(16),
+              decoration: pw.BoxDecoration(
+                color: PdfColors.blue50,
+                borderRadius: pw.BorderRadius.circular(8),
+                border: pw.Border.all(color: PdfColors.blue200),
+              ),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(
+                    'Executive Summary',
+                    style: pw.TextStyle(
+                      fontSize: 14,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.blue900,
+                    ),
+                  ),
+                  pw.SizedBox(height: 12),
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceAround,
+                    children: [
+                      _buildSummaryBox(
+                        'Total Income',
+                        formatter.format(summary.totalIncome),
+                        PdfColors.green,
+                      ),
+                      _buildSummaryBox(
+                        'Total Expenses',
+                        formatter.format(summary.totalExpenses),
+                        PdfColors.red,
+                      ),
+                      _buildSummaryBox(
+                        'Net Profit',
+                        formatter.format(summary.netProfit),
+                        summary.netProfit >= 0
+                            ? PdfColors.green
+                            : PdfColors.red,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            pw.SizedBox(height: 24),
+
+            // Profit Margin Indicator
+            pw.Container(
+              padding: const pw.EdgeInsets.all(12),
+              decoration: pw.BoxDecoration(
+                color: summary.netProfit >= 0
+                    ? PdfColors.green50
+                    : PdfColors.red50,
+                borderRadius: pw.BorderRadius.circular(8),
+              ),
+              child: pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text(
+                    'Profit Margin',
+                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                  ),
+                  pw.Text(
+                    summary.totalIncome > 0
+                        ? '${(summary.netProfit / summary.totalIncome * 100).toStringAsFixed(1)}%'
+                        : '0%',
+                    style: pw.TextStyle(
+                      fontWeight: pw.FontWeight.bold,
+                      color: summary.netProfit >= 0
+                          ? PdfColors.green700
+                          : PdfColors.red700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            pw.SizedBox(height: 24),
+
+            // Expense Categories Chart
+            if (topExpenses != null && topExpenses.isNotEmpty) ...[
+              pw.Text(
+                'Expense Breakdown',
+                style: pw.TextStyle(
+                  fontSize: 14,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+              pw.SizedBox(height: 12),
+              _buildExpenseChart(topExpenses, formatter, chartColors),
+              pw.SizedBox(height: 24),
+            ],
+
+            // Monthly Trend Chart
+            if (monthlySummaries != null && monthlySummaries.isNotEmpty) ...[
+              pw.Text(
+                'Monthly Trend',
+                style: pw.TextStyle(
+                  fontSize: 14,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+              pw.SizedBox(height: 12),
+              _buildMonthlyChart(monthlySummaries, formatter),
+              pw.SizedBox(height: 24),
+            ],
+
+            // Monthly Summary Table
+            if (monthlySummaries != null && monthlySummaries.isNotEmpty) ...[
+              pw.Text(
+                'Monthly Breakdown',
+                style: pw.TextStyle(
+                  fontSize: 14,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+              pw.SizedBox(height: 8),
+              _buildMonthlyTable(monthlySummaries, formatter),
+            ],
+          ],
+        ),
+      );
+
+      final bytes = await pdf.save();
+      final dateStr = DateFormat('yyyyMMdd').format(DateTime.now());
+
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename: 'detailed_financial_report_$dateStr.pdf',
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Report generated successfully!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error generating report: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error generating report: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isDownloading = false);
+      }
+    }
+  }
+
+  pw.Widget _buildPdfHeader(String farmName, String title) {
+    return pw.Container(
+      margin: const pw.EdgeInsets.only(bottom: 20),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            farmName,
+            style: pw.TextStyle(
+              fontSize: 18,
+              fontWeight: pw.FontWeight.bold,
+              color: PdfColors.blue900,
+            ),
+          ),
+          pw.SizedBox(height: 4),
+          pw.Text(
+            title,
+            style: const pw.TextStyle(fontSize: 14, color: PdfColors.grey700),
+          ),
+          pw.Divider(color: PdfColors.grey300),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _buildPdfFooter(pw.Context context) {
+    final dateFormat = DateFormat('MMM d, yyyy HH:mm');
+    return pw.Container(
+      margin: const pw.EdgeInsets.only(top: 10),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        children: [
+          pw.Text(
+            'Generated: ${dateFormat.format(DateTime.now())}',
+            style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600),
+          ),
+          pw.Text(
+            'Page ${context.pageNumber} of ${context.pagesCount}',
+            style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600),
+          ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _buildSummaryBox(String label, String value, PdfColor color) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(12),
+      decoration: pw.BoxDecoration(
+        color: PdfColors.white,
+        borderRadius: pw.BorderRadius.circular(6),
+        border: pw.Border.all(color: color, width: 2),
+      ),
+      child: pw.Column(
+        children: [
+          pw.Text(
+            value,
+            style: pw.TextStyle(
+              fontSize: 16,
+              fontWeight: pw.FontWeight.bold,
+              color: color,
+            ),
+          ),
+          pw.SizedBox(height: 4),
+          pw.Text(
+            label,
+            style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
+          ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _buildExpenseChart(
+    Map<String, double> categories,
+    CurrencyFormatter formatter,
+    List<PdfColor> colors,
+  ) {
+    final total = categories.values.fold(0.0, (sum, v) => sum + v);
+    final sortedEntries = categories.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(12),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.grey300),
+        borderRadius: pw.BorderRadius.circular(8),
+      ),
+      child: pw.Column(
+        children: sortedEntries.asMap().entries.map((entry) {
+          final index = entry.key;
+          final category = entry.value.key;
+          final amount = entry.value.value;
+          final percentage = total > 0 ? (amount / total * 100) : 0.0;
+          final color = colors[index % colors.length];
+
+          return pw.Container(
+            margin: const pw.EdgeInsets.symmetric(vertical: 4),
+            child: pw.Row(
+              children: [
+                pw.Container(
+                  width: 12,
+                  height: 12,
+                  decoration: pw.BoxDecoration(
+                    color: color,
+                    borderRadius: pw.BorderRadius.circular(2),
+                  ),
+                ),
+                pw.SizedBox(width: 8),
+                pw.Expanded(
+                  flex: 2,
+                  child: pw.Text(
+                    _formatCategoryString(category),
+                    style: const pw.TextStyle(fontSize: 10),
+                  ),
+                ),
+                pw.Expanded(
+                  flex: 3,
+                  child: pw.Stack(
+                    children: [
+                      pw.Container(
+                        height: 10,
+                        decoration: pw.BoxDecoration(
+                          color: PdfColors.grey200,
+                          borderRadius: pw.BorderRadius.circular(4),
+                        ),
+                      ),
+                      pw.Container(
+                        height: 10,
+                        width: percentage * 1.5,
+                        decoration: pw.BoxDecoration(
+                          color: color,
+                          borderRadius: pw.BorderRadius.circular(4),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                pw.SizedBox(width: 8),
+                pw.SizedBox(
+                  width: 80,
+                  child: pw.Text(
+                    formatter.formatCompact(amount),
+                    style: const pw.TextStyle(fontSize: 9),
+                    textAlign: pw.TextAlign.right,
+                  ),
+                ),
+                pw.SizedBox(width: 8),
+                pw.SizedBox(
+                  width: 35,
+                  child: pw.Text(
+                    '${percentage.toStringAsFixed(0)}%',
+                    style: const pw.TextStyle(
+                      fontSize: 9,
+                      color: PdfColors.grey600,
+                    ),
+                    textAlign: pw.TextAlign.right,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  pw.Widget _buildMonthlyChart(
+    List<FinancialSummary> summaries,
+    CurrencyFormatter formatter,
+  ) {
+    final monthNames = [
+      'J',
+      'F',
+      'M',
+      'A',
+      'M',
+      'J',
+      'J',
+      'A',
+      'S',
+      'O',
+      'N',
+      'D',
+    ];
+
+    final maxValue = summaries.fold(0.0, (max, s) {
+      final m = [
+        s.totalIncome,
+        s.totalExpenses,
+      ].reduce((a, b) => a > b ? a : b);
+      return m > max ? m : max;
+    });
+
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(12),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.grey300),
+        borderRadius: pw.BorderRadius.circular(8),
+      ),
+      child: pw.Column(
+        children: [
+          // Legend
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.center,
+            children: [
+              pw.Container(width: 12, height: 12, color: PdfColors.green),
+              pw.SizedBox(width: 4),
+              pw.Text('Income', style: const pw.TextStyle(fontSize: 9)),
+              pw.SizedBox(width: 16),
+              pw.Container(width: 12, height: 12, color: PdfColors.red),
+              pw.SizedBox(width: 4),
+              pw.Text('Expenses', style: const pw.TextStyle(fontSize: 9)),
+            ],
+          ),
+          pw.SizedBox(height: 12),
+          // Bar chart
+          pw.SizedBox(
+            height: 100,
+            child: pw.Row(
+              crossAxisAlignment: pw.CrossAxisAlignment.end,
+              children: summaries.asMap().entries.map((entry) {
+                final index = entry.key;
+                final summary = entry.value;
+                final incomeHeight = maxValue > 0
+                    ? (summary.totalIncome / maxValue * 80)
+                    : 0.0;
+                final expenseHeight = maxValue > 0
+                    ? (summary.totalExpenses / maxValue * 80)
+                    : 0.0;
+
+                return pw.Expanded(
+                  child: pw.Padding(
+                    padding: const pw.EdgeInsets.symmetric(horizontal: 1),
+                    child: pw.Column(
+                      mainAxisAlignment: pw.MainAxisAlignment.end,
+                      children: [
+                        pw.Row(
+                          mainAxisAlignment: pw.MainAxisAlignment.center,
+                          crossAxisAlignment: pw.CrossAxisAlignment.end,
+                          children: [
+                            pw.Container(
+                              width: 6,
+                              height: incomeHeight,
+                              color: PdfColors.green,
+                            ),
+                            pw.SizedBox(width: 1),
+                            pw.Container(
+                              width: 6,
+                              height: expenseHeight,
+                              color: PdfColors.red,
+                            ),
+                          ],
+                        ),
+                        pw.SizedBox(height: 4),
+                        pw.Text(
+                          monthNames[index],
+                          style: const pw.TextStyle(
+                            fontSize: 7,
+                            color: PdfColors.grey600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _buildMonthlyTable(
+    List<FinancialSummary> summaries,
+    CurrencyFormatter formatter,
+  ) {
+    final monthNames = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+
+    final monthsWithData = summaries
+        .where((s) => s.transactionCount > 0)
+        .toList();
+
+    if (monthsWithData.isEmpty) {
+      return pw.Container();
+    }
+
+    return pw.TableHelper.fromTextArray(
+      headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+      cellStyle: const pw.TextStyle(fontSize: 9),
+      headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
+      cellPadding: const pw.EdgeInsets.all(6),
+      cellAlignments: {
+        0: pw.Alignment.centerLeft,
+        1: pw.Alignment.centerRight,
+        2: pw.Alignment.centerRight,
+        3: pw.Alignment.centerRight,
+      },
+      headers: ['Month', 'Income', 'Expenses', 'Profit'],
+      data: monthsWithData.map((s) {
+        final index = summaries.indexOf(s);
+        return [
+          monthNames[index],
+          formatter.formatCompact(s.totalIncome),
+          formatter.formatCompact(s.totalExpenses),
+          formatter.formatCompact(s.netProfit),
+        ];
+      }).toList(),
+    );
   }
 }
 

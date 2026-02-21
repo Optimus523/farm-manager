@@ -434,10 +434,7 @@ final monthBudgetWithComparisonProvider =
     });
 
 final animalFinancialsProvider =
-    FutureProvider.family<AnimalFinancials, String>((
-      ref,
-      animalId,
-    ) async {
+    FutureProvider.family<AnimalFinancials, String>((ref, animalId) async {
       final repository = ref.watch(financialRepositoryProvider);
       return repository.getAnimalFinancials(animalId);
     });
@@ -571,15 +568,15 @@ final farmCurrencyProvider = Provider<CurrencyConfig>((ref) {
 
   return farmSettings.when(
     data: (settings) {
-      if (settings == null) return CurrencyConfig.fromCurrency(Currency.usd);
+      if (settings == null) return CurrencyConfig.fromCurrency(Currency.ugx);
       final currencyCode = settings['currency'] as String?;
       if (currencyCode == null) {
-        return CurrencyConfig.fromCurrency(Currency.usd);
+        return CurrencyConfig.fromCurrency(Currency.ugx);
       }
       return CurrencyConfig.fromCode(currencyCode);
     },
-    loading: () => CurrencyConfig.fromCurrency(Currency.usd),
-    error: (_, _) => CurrencyConfig.fromCurrency(Currency.usd),
+    loading: () => CurrencyConfig.fromCurrency(Currency.ugx),
+    error: (_, _) => CurrencyConfig.fromCurrency(Currency.ugx),
   );
 });
 
