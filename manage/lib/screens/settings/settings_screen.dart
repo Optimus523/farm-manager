@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/auth_providers.dart';
 import '../../providers/theme_provider.dart';
 import '../../router/app_router.dart';
+import '../../utils/keyboard_shortcuts.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -166,6 +167,15 @@ class SettingsScreen extends ConsumerWidget {
                   title: 'Support & About',
                   icon: Icons.help_outline,
                   children: [
+                    _SettingsTile(
+                      icon: Icons.keyboard_outlined,
+                      iconColor: Colors.blueGrey,
+                      title: 'Keyboard Shortcuts',
+                      subtitle: 'View available shortcuts',
+                      onTap: () {
+                        KeyboardShortcuts.showShortcutsHelp(context);
+                      },
+                    ),
                     _SettingsTile(
                       icon: Icons.help_center_outlined,
                       iconColor: Colors.teal,
