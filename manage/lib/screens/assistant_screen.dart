@@ -62,18 +62,21 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
           _userContainerTag = _memoryService!.getContainerTag(user.id);
 
           // Fetch the user's memory profile to inject into the system prompt
-          final searchResponse = await _memoryService!.searchMemories(
-            containerTag: _userContainerTag!,
-            query: 'farm management preferences context',
-            limit: 10,
-            threshold: 0.5,
-          ).timeout(const Duration(seconds: 5));
+          final searchResponse = await _memoryService!
+              .searchMemories(
+                containerTag: _userContainerTag!,
+                query: 'farm management preferences context',
+                limit: 10,
+                threshold: 0.5,
+              )
+              .timeout(const Duration(seconds: 5));
 
           if (searchResponse.hasResults) {
             final memories = searchResponse.results
                 .map((m) => '- ${m.content}')
                 .join('\n');
-            memoryContext = '''
+            memoryContext =
+                '''
 
 === USER MEMORY CONTEXT ===
 You remember these things about the user from previous conversations:
@@ -227,12 +230,11 @@ DO NOT say you cannot remember or don't have memory - you have all the animal da
 ''',
       );
 
-      // Listen for AI responses to store conversations in memory
-      _responseSubscription = contentGenerator.textResponseStream.listen(
-        (responseText) {
-          _storeConversationMemory(responseText);
-        },
-      );
+      _responseSubscription = contentGenerator.textResponseStream.listen((
+        responseText,
+      ) {
+        _storeConversationMemory(responseText);
+      });
 
       _conversation = GenUiConversation(
         contentGenerator: contentGenerator,
@@ -301,18 +303,20 @@ DO NOT say you cannot remember or don't have memory - you have all the animal da
     }
 
     final userMsg = _lastUserMessage!;
-    _lastUserMessage = null; // Reset so we don't re-store
+    _lastUserMessage = null;
 
-    // Fire-and-forget — don't await, don't block the UI
-    _memoryService!.storeConversation(
-      containerTag: _userContainerTag!,
-      userMessage: userMsg,
-      assistantResponse: assistantResponse,
-    ).then((_) {
-      debugPrint('Conversation stored in memory');
-    }).catchError((e) {
-      debugPrint('Failed to store conversation in memory: $e');
-    });
+    _memoryService!
+        .storeConversation(
+          containerTag: _userContainerTag!,
+          userMessage: userMsg,
+          assistantResponse: assistantResponse,
+        )
+        .then((_) {
+          debugPrint('Conversation stored in memory');
+        })
+        .catchError((e) {
+          debugPrint('Failed to store conversation in memory: $e');
+        });
   }
 
   void _resetAndReinitialize() {
@@ -339,7 +343,6 @@ DO NOT say you cannot remember or don't have memory - you have all the animal da
   Widget build(BuildContext context) {
     final animalsAsync = ref.watch(allAnimalsForAIProvider);
 
-    // Show error state if initialization failed
     if (_initError != null) {
       return Scaffold(
         appBar: AppBar(title: const Text("Farm Assistant")),
