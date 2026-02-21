@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,8 +7,10 @@ import 'package:genui/genui.dart';
 import 'package:manage/config/genui_catalog.dart';
 import 'package:manage/config/theme.dart';
 import 'package:manage/models/animal.dart';
+import 'package:manage/providers/auth_providers.dart';
 import 'package:manage/providers/providers.dart';
 import 'package:manage/services/gemini_content_generator.dart';
+import 'package:manage/services/memory_service.dart';
 import 'package:manage/utils/env_helper.dart';
 
 class AssistantScreen extends ConsumerStatefulWidget {
@@ -25,12 +29,18 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
 
   final _textController = TextEditingController();
 
+  // Memory integration
+  MemoryService? _memoryService;
+  String? _userContainerTag;
+  String? _lastUserMessage;
+  StreamSubscription<String>? _responseSubscription;
+
   @override
   void initState() {
     super.initState();
   }
 
-  void _initializeConversation(List<Animal> animals) {
+  Future<void> _initializeConversation(List<Animal> animals) async {
     if (_isInitialized) return; // Prevent re-initialization
     _isInitialized = true;
 
@@ -40,10 +50,46 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
           _initError = "GEMINI_API_KEY is missing from .env file";
         });
         debugPrint("WARNING: GEMINI_API_KEY is missing from .env");
-        setState(() {
-          _initError = "GEMINI_API_KEY is missing from .env file";
-        });
         return;
+      }
+
+      // --- Memory system initialization ---
+      String memoryContext = '';
+      try {
+        _memoryService = ref.read(memoryServiceProvider);
+        final user = ref.read(currentUserProvider).value;
+        if (user != null) {
+          _userContainerTag = _memoryService!.getContainerTag(user.id);
+
+          // Fetch the user's memory profile to inject into the system prompt
+          final searchResponse = await _memoryService!.searchMemories(
+            containerTag: _userContainerTag!,
+            query: 'farm management preferences context',
+            limit: 10,
+            threshold: 0.5,
+          ).timeout(const Duration(seconds: 5));
+
+          if (searchResponse.hasResults) {
+            final memories = searchResponse.results
+                .map((m) => '- ${m.content}')
+                .join('\n');
+            memoryContext = '''
+
+=== USER MEMORY CONTEXT ===
+You remember these things about the user from previous conversations:
+$memories
+=== END MEMORY CONTEXT ===
+''';
+            debugPrint(
+              'Loaded ${searchResponse.results.length} memories for assistant context',
+            );
+          }
+        }
+      } catch (e) {
+        // Memory API unavailable — continue without memory
+        debugPrint('Memory service unavailable, continuing without memory: $e');
+        _memoryService = null;
+        _userContainerTag = null;
       }
 
       // Use the standard GenUI catalog ID so parseToolCall generates compatible messages
@@ -94,6 +140,7 @@ CRITICAL: When the user asks about an animal by name or tag ID, you MUST search 
             '''
 You are a helpful farm management assistant. You help farmers manage their livestock, track feeding schedules, monitor health records, manage reminders/notifications, and analyze farm data.
 $animalContext
+$memoryContext
 
 === IMPORTANT: HOW TO USE TOOLS ===
 You have access to these specific tools via render_farm. Each tool renders a pre-built interactive widget.
@@ -180,6 +227,13 @@ DO NOT say you cannot remember or don't have memory - you have all the animal da
 ''',
       );
 
+      // Listen for AI responses to store conversations in memory
+      _responseSubscription = contentGenerator.textResponseStream.listen(
+        (responseText) {
+          _storeConversationMemory(responseText);
+        },
+      );
+
       _conversation = GenUiConversation(
         contentGenerator: contentGenerator,
         a2uiMessageProcessor: _processor!,
@@ -238,7 +292,32 @@ DO NOT say you cannot remember or don't have memory - you have all the animal da
     }
   }
 
+  /// Store a conversation exchange in the memory system (fire-and-forget)
+  void _storeConversationMemory(String assistantResponse) {
+    if (_memoryService == null ||
+        _userContainerTag == null ||
+        _lastUserMessage == null) {
+      return;
+    }
+
+    final userMsg = _lastUserMessage!;
+    _lastUserMessage = null; // Reset so we don't re-store
+
+    // Fire-and-forget — don't await, don't block the UI
+    _memoryService!.storeConversation(
+      containerTag: _userContainerTag!,
+      userMessage: userMsg,
+      assistantResponse: assistantResponse,
+    ).then((_) {
+      debugPrint('Conversation stored in memory');
+    }).catchError((e) {
+      debugPrint('Failed to store conversation in memory: $e');
+    });
+  }
+
   void _resetAndReinitialize() {
+    _responseSubscription?.cancel();
+    _responseSubscription = null;
     setState(() {
       _isInitialized = false;
       _initError = null;
@@ -249,6 +328,8 @@ DO NOT say you cannot remember or don't have memory - you have all the animal da
 
   @override
   void dispose() {
+    _responseSubscription?.cancel();
+    _memoryService?.dispose();
     _conversation?.dispose();
     _textController.dispose();
     super.dispose();
@@ -574,6 +655,9 @@ DO NOT say you cannot remember or don't have memory - you have all the animal da
   void _sendMessage() {
     final text = _textController.text.trim();
     if (text.isEmpty) return;
+
+    // Track the user's message for memory storage
+    _lastUserMessage = text;
 
     _conversation!.sendRequest(UserMessage.text(text));
     _textController.clear();

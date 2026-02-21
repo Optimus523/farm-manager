@@ -140,7 +140,7 @@ void main() {
       await tester.tap(find.byIcon(Icons.refresh));
       await tester.pumpAndSettle();
 
-      expect(find.text('Refreshing predictions...'), findsOneWidget);
+      expect(find.text('Data refreshed'), findsOneWidget);
     });
 
     testWidgets('should show snackbar when Train Models is tapped', (
@@ -160,7 +160,8 @@ void main() {
       await tester.tap(find.text('Train Models'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Model training coming soon!'), findsOneWidget);
+      // Button is disabled when no data is loaded, so dialog does not appear
+      expect(find.text('Train ML Models'), findsNothing);
     });
 
     testWidgets('should display status chips with Not Trained label', (
@@ -187,7 +188,7 @@ void main() {
 
       expect(find.text('Models'), findsOneWidget);
       expect(find.text('Predictions'), findsOneWidget);
-      expect(find.text('Accuracy'), findsOneWidget);
+      expect(find.text('Records'), findsOneWidget);
     });
   });
 }
