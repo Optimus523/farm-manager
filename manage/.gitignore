@@ -52,6 +52,9 @@ assets/.env
 # Allow .env.example as a template
 !.env.example
 
+# Firebase local config (contains API keys)
+web/firebase-config.local.js
+
 # Sensitive files
 password.txt
 .vscode/mcp.json
