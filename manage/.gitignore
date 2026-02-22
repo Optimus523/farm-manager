@@ -57,3 +57,12 @@ password.txt
 .vscode/mcp.json
 weight_records_rows.json
 supabase/schema.sql
+
+# Documentation (keep locally, not in repo)
+ML_PIPELINE_ROADMAP.md
+ROADMAP.md
+UI_DESIGN.md
+docs/
+assets/docs/article.md
+assets/docs/article2.md
+!README.md
