@@ -20,3 +20,10 @@ Thumbs.db
 
 # Environment files
 .env
+
+# Documentation (keep locally, not in repo)
+FRONTEND_ENHANCEMENTS.md
+IMPLEMENTATION_SUMMARY.md
+PR_SUMMARY.md
+manage/assets/docs/documentation.md
+!README.md
