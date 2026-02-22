@@ -67,3 +67,13 @@ jobs:
 
       - name: Build web
         run: flutter build web --no-tree-shake-icons
+
+      - name: Deploy to Firebase Hosting
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_MANAGE_D26FA }}
+          channelId: live
+          projectId: manage-d26fa
+          entryPoint: manage
