@@ -12,6 +12,7 @@ import 'package:manage/models/health_record.dart';
 import 'package:manage/providers/auth_providers.dart';
 import 'package:manage/providers/providers.dart';
 import 'package:manage/services/assistant_data_service.dart';
+import 'package:manage/services/featherless_content_generator.dart';
 import 'package:manage/services/gemini_content_generator.dart';
 import 'package:manage/services/memory_service.dart';
 import 'package:manage/utils/env_helper.dart';
@@ -24,7 +25,11 @@ class AssistantScreen extends ConsumerStatefulWidget {
 }
 
 class _AssistantScreenState extends ConsumerState<AssistantScreen> {
-  final String _apiKey = EnvHelper.getOrDefault('GEMINI_API_KEY', '');
+  final String _geminiApiKey = EnvHelper.getOrDefault('GEMINI_API_KEY', '');
+  final String _featherlessApiKey = EnvHelper.getOrDefault(
+    'FEATHERLESS_API_KEY',
+    '',
+  );
   GenUiConversation? _conversation;
   A2uiMessageProcessor? _processor;
   String? _initError;
@@ -48,13 +53,18 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     _isInitialized = true;
 
     try {
-      if (_apiKey.isEmpty) {
+      final useFeatherless = _featherlessApiKey.isNotEmpty;
+      if (!useFeatherless && _geminiApiKey.isEmpty) {
         setState(() {
-          _initError = "GEMINI_API_KEY is missing from .env file";
+          _initError =
+              "No API key found. Set FEATHERLESS_API_KEY or GEMINI_API_KEY in .env";
         });
-        debugPrint("WARNING: GEMINI_API_KEY is missing from .env");
+        debugPrint("WARNING: No LLM API key found in .env");
         return;
       }
+      debugPrint(
+        'Using ${useFeatherless ? "Featherless (DeepSeek-V3)" : "Gemini"}',
+      );
 
       // --- Memory system initialization ---
       String memoryContext = '';
@@ -73,7 +83,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                 query:
                     'farm management preferences context tools health animals reminders',
                 limit: 15,
-                threshold: 0.4, // Lowered for better recall
+                threshold: 0.4,
               )
               .timeout(
                 const Duration(seconds: 15),
@@ -253,13 +263,8 @@ When users ask about health records, vaccinations, medications, or animal health
       // Current date for context
       final currentDate = DateFormat('MMMM d, yyyy').format(DateTime.now());
 
-      final contentGenerator = GeminiContentGenerator(
-        apiKey: _apiKey,
-        modelName: 'gemini-2.5-flash',
-        catalogs: catalogs,
-        disableTools: false,
-        additionalSystemPrompt:
-            '''
+      final systemPrompt =
+          '''
 You are a helpful farm management assistant. You help farmers manage their livestock, track feeding schedules, monitor health records, manage reminders/notifications, and analyze farm data.
 
 IMPORTANT: Today's date is $currentDate. Use this year (${DateTime.now().year}) for all date-related requests.
@@ -278,8 +283,27 @@ RESPONSE GUIDELINES:
 6. For date ranges like "January" or "last month", use the CURRENT YEAR (${DateTime.now().year}) unless user specifies otherwise.
 
 DO NOT say you cannot remember or don't have memory - you have all the animal and health data listed above!
-''',
-      );
+''';
+
+      // Create content generator based on available API key
+      final ContentGenerator contentGenerator;
+      if (_featherlessApiKey.isNotEmpty) {
+        contentGenerator = FeatherlessContentGenerator(
+          apiKey: _featherlessApiKey,
+          modelName: 'deepseek-ai/DeepSeek-V3.2',
+          catalogs: catalogs,
+          disableTools: false,
+          additionalSystemPrompt: systemPrompt,
+        );
+      } else {
+        contentGenerator = GeminiContentGenerator(
+          apiKey: _geminiApiKey,
+          modelName: 'gemini-2.5-flash',
+          catalogs: catalogs,
+          disableTools: false,
+          additionalSystemPrompt: systemPrompt,
+        );
+      }
 
       _responseSubscription = contentGenerator.textResponseStream.listen((
         responseText,

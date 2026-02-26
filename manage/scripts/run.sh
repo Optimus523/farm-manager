@@ -1,0 +1,32 @@
+#!/bin/bash
+# Run Flutter with environment variables from .env file
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+ENV_FILE="$PROJECT_DIR/.env"
+
+if [ ! -f "$ENV_FILE" ]; then
+    echo "Error: .env file not found at $ENV_FILE"
+    exit 1
+fi
+
+# Build dart-define arguments from .env
+DART_DEFINES=""
+while IFS='=' read -r key value || [ -n "$key" ]; do
+    # Skip empty lines and comments
+    [[ -z "$key" || "$key" =~ ^# ]] && continue
+    # Remove any carriage returns and trim whitespace
+    key=$(echo "$key" | tr -d '\r' | xargs)
+    value=$(echo "$value" | tr -d '\r')
+    if [ -n "$key" ] && [ -n "$value" ]; then
+        DART_DEFINES="$DART_DEFINES --dart-define=$key=$value"
+    fi
+done < "$ENV_FILE"
+
+cd "$PROJECT_DIR"
+
+# Pass any additional arguments to flutter run
+echo "Running: flutter run $DART_DEFINES $@"
+flutter run $DART_DEFINES "$@"
