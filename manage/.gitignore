@@ -69,3 +69,5 @@ docs/
 assets/docs/article.md
 assets/docs/article2.md
 !README.md.firebase/
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
