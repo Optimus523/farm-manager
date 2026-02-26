@@ -164,7 +164,12 @@ class FeatherlessContentGenerator implements ContentGenerator {
       // Handle tool calls
       final toolCalls = assistantMessage['tool_calls'] as List<dynamic>?;
       if (toolCalls != null && toolCalls.isNotEmpty) {
+        // First, add the assistant message with tool_calls to history
+        _messageHistory.add({'role': 'assistant', 'tool_calls': toolCalls});
+
+        // Process each tool call and add tool result messages
         for (final toolCall in toolCalls) {
+          final toolCallId = toolCall['id'] as String;
           final function = toolCall['function'];
           final toolName = function['name'] as String;
           final arguments = jsonDecode(function['arguments'] as String);
@@ -184,6 +189,7 @@ class FeatherlessContentGenerator implements ContentGenerator {
 
           // Use genui's parseToolCall to convert to A2uiMessage
           final genUiToolCall = ToolCall(args: safeArgs, name: finalToolName);
+          String toolResult = 'success';
           try {
             final parsed = parseToolCall(genUiToolCall, finalToolName);
             debugPrint(
@@ -192,14 +198,20 @@ class FeatherlessContentGenerator implements ContentGenerator {
             for (var msg in parsed.messages) {
               _a2uiController.add(msg);
             }
+            toolResult = 'UI component rendered successfully';
           } catch (e, stackTrace) {
             debugPrint("Error parsing tool call: $e");
             debugPrint("Stack trace: $stackTrace");
+            toolResult = 'Error: $e';
           }
-        }
 
-        // Add tool call to history
-        _messageHistory.add({'role': 'assistant', 'tool_calls': toolCalls});
+          // Add tool result message to history (required by OpenAI-compatible APIs)
+          _messageHistory.add({
+            'role': 'tool',
+            'tool_call_id': toolCallId,
+            'content': toolResult,
+          });
+        }
       }
     } catch (e, stack) {
       debugPrint('Featherless error: $e');
