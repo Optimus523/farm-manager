@@ -11,7 +11,11 @@ class MemoryApiConfig {
       return 'http://127.0.0.1:8000/api/v1/memory';
     }
     // Android emulator uses 10.0.2.2 to reach host machine's localhost
-    return 'http://10.0.2.2:8000/api/v1/memory';
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      return 'http://10.0.2.2:8000/api/v1/memory';
+    }
+    // Linux, Windows, macOS desktop — backend runs on the same machine
+    return 'http://127.0.0.1:8000/api/v1/memory';
   }
 }
 

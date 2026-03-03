@@ -85,9 +85,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                 limit: 15,
                 threshold: 0.4,
               )
-              .timeout(
-                const Duration(seconds: 15),
-              ); // Increased from 5s - embeddings can be slow
+              .timeout(const Duration(seconds: 15));
 
           if (searchResponse.hasResults) {
             final memories = searchResponse.results
@@ -118,6 +116,8 @@ $memories
         _memoryService = null;
         _userContainerTag = null;
       }
+
+      if (!mounted) return;
 
       // Use the standard GenUI catalog ID so parseToolCall generates compatible messages
       final catalog = Catalog(farmTools, catalogId: 'farm');
@@ -162,9 +162,8 @@ CRITICAL: When the user asks about an animal by name or tag ID, you MUST search 
       String healthContext = "";
       try {
         final dataService = ref.read(assistantDataServiceProvider);
-        // Wait for health records to load before building context
         final healthRecords = await dataService.waitForHealthRecords(
-          timeout: const Duration(seconds: 8), // Increased timeout
+          timeout: const Duration(seconds: 8),
         );
         debugPrint(
           'Loaded ${healthRecords.length} health records for assistant context',
@@ -256,6 +255,8 @@ When users ask about health records, vaccinations, medications, or animal health
         debugPrint('Failed to load health records for assistant: $e');
         healthContext = '\nHealth records are temporarily unavailable.';
       }
+
+      if (!mounted) return;
 
       // Generate tools context from catalog definitions
       final toolsContext = generateToolsContext();
@@ -359,18 +360,21 @@ DO NOT say you cannot remember or don't have memory - you have all the animal an
         },
       );
 
-      setState(() {});
+      if (mounted) setState(() {});
     } catch (e, stack) {
       debugPrint("Failed to initialize GenUI: $e");
       debugPrint("Stack: $stack");
-      setState(() {
-        _initError = "Failed to initialize AI: $e";
-      });
+      if (mounted) {
+        setState(() {
+          _initError = "Failed to initialize AI: $e";
+        });
+      }
     }
   }
 
   /// Store a conversation exchange in the memory system (fire-and-forget)
   void _storeConversationMemory(String assistantResponse) {
+    if (!mounted) return;
     if (_memoryService == null ||
         _userContainerTag == null ||
         _lastUserMessage == null) {
