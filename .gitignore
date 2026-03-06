@@ -1,6 +1,3 @@
-# Ignore backend directory for now
-backend/
-
 # Flutter/Dart
 manage/.dart_tool/
 manage/.packages
