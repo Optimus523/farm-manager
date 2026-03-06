@@ -1,0 +1,21 @@
+artifact_path: /home/ayiko/Desktop/farm-manager/backend/mlruns/1/models/m-c3b055bfefb84f72a393255eb6f8d28e/artifacts
+flavors:
+  lightgbm:
+    code: null
+    data: model.pkl
+    lgb_version: 4.6.0
+    model_class: lightgbm.sklearn.LGBMRegressor
+  python_function:
+    data: model.pkl
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.lightgbm
+    python_version: 3.12.3
+mlflow_version: 3.8.1
+model_id: m-c3b055bfefb84f72a393255eb6f8d28e
+model_size_bytes: 98390
+model_uuid: m-c3b055bfefb84f72a393255eb6f8d28e
+prompts: null
+run_id: a9c2b26452814bbeb571daaa0510eae9
+utc_time_created: '2026-01-19 22:04:49.085883'
