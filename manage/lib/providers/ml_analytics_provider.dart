@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/ml_models.dart';
 import '../models/animal.dart';
@@ -10,14 +11,20 @@ import 'providers.dart';
 // ML Service Provider
 // =============================================================================
 
-/// Provider for the ML Service instance
+/// Provider for the ML Service instance.
+/// Uses the `BASE_URL` environment variable for backend connection.
 final mlServiceProvider = Provider<MLService>((ref) {
-  final service = MLService(
-    // TODO: Make this configurable via environment/config
-    baseUrl: 'http://127.0.0.1:8000',
-  );
+  final service = MLService();
   ref.onDispose(() => service.dispose());
   return service;
+});
+
+/// Provider to pre-warm the backend on free-tier hosts (e.g., Render).
+/// Call this early in the app lifecycle to minimize cold start delays.
+/// Returns true if backend is responsive, false otherwise.
+final mlWarmUpProvider = FutureProvider<bool>((ref) async {
+  final service = ref.watch(mlServiceProvider);
+  return service.wakeUp();
 });
 
 /// Provider to check API health status
@@ -30,6 +37,14 @@ final mlHealthProvider = FutureProvider<MLHealthStatus>((ref) async {
 final mlModelInfoProvider = FutureProvider<MLModelInfo>((ref) async {
   final service = ref.watch(mlServiceProvider);
   return service.getModelInfo();
+});
+
+/// Provider for health model info
+final mlHealthModelInfoProvider = FutureProvider<MLHealthModelInfo>((
+  ref,
+) async {
+  final service = ref.watch(mlServiceProvider);
+  return service.getHealthModelInfo();
 });
 
 // =============================================================================
@@ -142,11 +157,14 @@ final mlAnalyticsProvider =
     );
 
 class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
-  late final MLService _mlService;
+  /// Cache of features per animal for SHAP explanations
+  final Map<String, Map<String, dynamic>> _animalFeatures = {};
+
+  MLService get _mlService => ref.read(mlServiceProvider);
 
   @override
   MLAnalyticsState build() {
-    _mlService = ref.watch(mlServiceProvider);
+    print('[ML] MLService initialized with baseUrl: ${_mlService.baseUrl}');
     // Schedule data loading after build completes to avoid circular dependency
     Future.microtask(() => loadAnalytics());
     return const MLAnalyticsState(isLoading: true);
@@ -163,9 +181,13 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
           error: 'Connection timeout',
         ),
       );
+      print(
+        '[ML] Health check result: status=${health.status}, healthy=${health.isHealthy}, error=${health.error}',
+      );
       state = state.copyWith(isConnected: health.isHealthy);
       return health.isHealthy;
-    } catch (_) {
+    } catch (e) {
+      print('[ML] checkConnection exception: $e');
       state = state.copyWith(isConnected: false);
       return false;
     }
@@ -176,30 +198,36 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
     state = state.copyWith(isLoading: true, error: null);
 
     try {
-      // First check if API is available with a short timeout
       final isConnected = await checkConnection();
+      if (kDebugMode) {
+        print('[ML] Connection check: $isConnected');
+      }
 
       if (isConnected) {
         try {
-          await _loadFromAPI().timeout(const Duration(seconds: 15));
+          print('[ML] Calling _loadFromAPI...');
+          await _loadFromAPI().timeout(const Duration(seconds: 30));
+          print('[ML] _loadFromAPI completed');
         } on TimeoutException {
-          // Show error on timeout - no mock data
+          print('[ML] _loadFromAPI timed out');
           state = state.copyWith(
             error: 'Connection timed out. Please check your ML API server.',
           );
+        } catch (e) {
+          print('[ML] _loadFromAPI error: $e');
+          rethrow;
         }
       } else {
-        // Show error when API is not available - no mock data
         state = state.copyWith(
           error:
-              'ML API is not available. Please start your ML server at http://127.0.0.1:8000',
+              'ML API is not available. Please check your internet connection.',
         );
       }
-    } catch (e) {
-      // Show error - no mock data
+    } catch (e, st) {
+      print('[ML] loadAnalytics exception: $e');
+      print('[ML] Stack trace: $st');
       state = state.copyWith(error: e.toString());
     } finally {
-      // Always ensure loading is set to false
       state = state.copyWith(isLoading: false);
     }
   }
@@ -207,8 +235,12 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
   /// Load data from the live API
   Future<void> _loadFromAPI() async {
     try {
-      // Get model info from API
+      print('[ML] _loadFromAPI starting...');
       final modelInfo = await _mlService.getModelInfo();
+      print(
+        '[ML] Got model info: status=${modelInfo.status}, samples=${modelInfo.samples}',
+      );
+
       final testMetrics = modelInfo.testMetrics;
       state = state.copyWith(
         modelInfo: modelInfo,
@@ -223,26 +255,35 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
         ),
       );
 
-      // Get animals and weight records from Supabase
-      final animalsAsync = ref.read(animalsProvider);
-      final weightRecordsAsync = ref.read(weightRecordsProvider);
+      print('[ML] Fetching animals...');
+      final animals = await ref.read(animalsProvider.future);
+      print('[ML] Got ${animals.length} animals');
 
-      List<Animal> animals = [];
-      List<WeightRecord> weightRecords = [];
-
-      // Safely extract values from AsyncValue
-      animalsAsync.when(
-        data: (data) => animals = data,
-        loading: () {},
-        error: (_, _) {},
-      );
-      weightRecordsAsync.when(
-        data: (data) => weightRecords = data,
-        loading: () {},
-        error: (_, _) {},
-      );
+      print('[ML] Fetching weight records...');
+      List<WeightRecord> weightRecords;
+      try {
+        weightRecords = await ref
+            .read(weightRecordsProvider.future)
+            .timeout(const Duration(seconds: 15));
+        print('[ML] Got ${weightRecords.length} weight records from stream');
+      } on TimeoutException {
+        // Fall back to direct query
+        print('[ML] Stream timeout, falling back to direct query...');
+        final farmId = ref.read(activeFarmIdProvider);
+        if (farmId == null) {
+          print('[ML] No active farm, returning empty weight records');
+          weightRecords = [];
+        } else {
+          final weightRepo = ref.read(weightRepositoryProvider);
+          weightRecords = await weightRepo.getWeightRecords(farmId);
+          print(
+            '[ML] Got ${weightRecords.length} weight records from direct query',
+          );
+        }
+      }
 
       if (animals.isEmpty) {
+        print('[ML] No animals found, returning empty state');
         // No animals yet - show empty state with API connection
         state = state.copyWith(
           predictions: [],
@@ -261,16 +302,23 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
             .putIfAbsent(record.animalId, () => [])
             .add(record);
       }
+      print(
+        '[ML] Animals with weight records: ${weightRecordsByAnimal.length}',
+      );
 
       // Compute predictions for each animal using the ML API
       final predictions = <WeightPrediction>[];
       final healthScores = <AnimalHealthScore>[];
+      int skippedNoWeight = 0;
 
       for (final animal in animals) {
         final animalWeightRecords = weightRecordsByAnimal[animal.id] ?? [];
 
         // Skip animals without enough weight data
-        if (animalWeightRecords.isEmpty) continue;
+        if (animalWeightRecords.isEmpty) {
+          skippedNoWeight++;
+          continue;
+        }
 
         // Sort by date descending
         animalWeightRecords.sort((a, b) => b.date.compareTo(a.date));
@@ -280,6 +328,12 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
         try {
           // Compute features and predict using live API
           final features = _buildFeatures(animal, animalWeightRecords);
+          print(
+            '[ML] Predicting for ${animal.tagId} with ${features.length} features',
+          );
+
+          // Cache features for later SHAP explanation use
+          _animalFeatures[animal.id] = features;
 
           final apiResponse = await _mlService.predictWeight(
             features: features,
@@ -307,7 +361,7 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
               confidenceScore: apiResponse.confidence,
               lowerBound: lowerBound,
               upperBound: upperBound,
-              targetWeight: 100, // Default target
+              targetWeight: 100,
               daysToTarget: _estimateDaysToTarget(
                 currentWeight,
                 apiResponse.predictedWeight,
@@ -317,15 +371,82 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
             ),
           );
 
-          // Generate health score based on features
-          healthScores.add(
-            _buildHealthScore(animal, animalWeightRecords, features),
-          );
+          // Try health model API for health score, fall back to local
+          try {
+            final healthResponse = await _mlService.predictHealthRisk(
+              features: features,
+              horizonDays: state.selectedHorizon.days,
+            );
+
+            // Map API risk level string to RiskLevel enum
+            RiskLevel riskLevel;
+            switch (healthResponse.riskLevel) {
+              case 'critical':
+                riskLevel = RiskLevel.critical;
+              case 'high':
+                riskLevel = RiskLevel.high;
+              case 'moderate':
+                riskLevel = RiskLevel.moderate;
+              default:
+                riskLevel = RiskLevel.low;
+            }
+
+            final riskFactors = <HealthRiskFactor>[];
+            if (healthResponse.treatmentLikely) {
+              riskFactors.add(
+                HealthRiskFactor(
+                  name: 'Treatment Likely',
+                  severity: RiskLevel.moderate,
+                  description:
+                      'Treatment probability: ${(healthResponse.treatmentProbability * 100).toStringAsFixed(0)}%',
+                  pointsImpact: -10,
+                ),
+              );
+            }
+            if (healthResponse.healthDeclining) {
+              riskFactors.add(
+                HealthRiskFactor(
+                  name: 'Health Declining',
+                  severity: RiskLevel.high,
+                  description:
+                      'Predicted score change: ${healthResponse.predictedScoreDelta.toStringAsFixed(1)} (${healthResponse.trend})',
+                  pointsImpact: -15,
+                ),
+              );
+            }
+
+            // Derive a health score: start at currentHealthScore, adjust by risk
+            final healthScore =
+                healthResponse.currentHealthScore -
+                healthResponse.predictedRiskScore.round().clamp(0, 60);
+
+            healthScores.add(
+              AnimalHealthScore(
+                animalId: animal.id,
+                animalTagId: animal.tagId,
+                animalName: animal.name ?? animal.tagId,
+                healthScore: healthScore.clamp(0, 100),
+                riskLevel: riskLevel,
+                riskFactors: riskFactors,
+                lastUpdated: DateTime.now(),
+              ),
+            );
+          } catch (_) {
+            // Fall back to local health score computation
+            healthScores.add(
+              _buildHealthScore(animal, animalWeightRecords, features),
+            );
+          }
         } catch (e) {
           // Skip animals that fail prediction
+          print('[ML] Prediction FAILED for ${animal.tagId}: $e');
           continue;
         }
       }
+
+      print(
+        '[ML] Final: ${predictions.length} predictions, ${healthScores.length} health scores, $skippedNoWeight skipped (no weight)',
+      );
 
       // Generate summaries and insights
       final weightSummary = _computeWeightSummary(predictions);
@@ -774,67 +895,51 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
     }
   }
 
-  /// Get SHAP explanation for a prediction (legacy support with mock)
+  /// Get SHAP explanation for a prediction
   Future<ShapExplanation?> getShapExplanation(String animalId) async {
-    // First try API if connected
-    if (state.isConnected) {
-      // TODO: Get features for this animal and call explain endpoint
-      // For now, return mock data
+    // Try API with cached features
+    if (state.isConnected && _animalFeatures.containsKey(animalId)) {
+      try {
+        final features = _animalFeatures[animalId]!;
+        final response = await _mlService.explainPrediction(
+          features: features,
+          horizonDays: state.selectedHorizon.days,
+        );
+
+        // Convert MLExplanationResponse to ShapExplanation
+        final allFactors = [
+          ...response.explanation.positiveFactors,
+          ...response.explanation.negativeFactors,
+        ];
+
+        return ShapExplanation(
+          animalId: animalId,
+          predictionType: 'weight',
+          baseValue: response.baseValue,
+          predictedValue: response.predictedWeight,
+          modelConfidence: response.predictedGain > 0 ? 0.85 : 0.6,
+          generatedAt: DateTime.now(),
+          summary: response.explanation.summary,
+          recommendation:
+              'Based on model analysis. ${response.explanation.positiveFactors.isNotEmpty ? "Key growth drivers: ${response.explanation.positiveFactors.take(2).map((f) => f.displayName).join(", ")}." : ""}',
+          features: allFactors
+              .map(
+                (f) => ShapFeature(
+                  featureName: f.feature,
+                  displayName: f.displayName,
+                  value: (f.value as num?)?.toDouble() ?? 0.0,
+                  shapValue: f.contribution,
+                  explanation: f.userExplanation,
+                ),
+              )
+              .toList(),
+        );
+      } catch (_) {
+        // Fall through to null
+      }
     }
 
-    // Return mock data
-    return ShapExplanation(
-      animalId: animalId,
-      predictionType: 'weight',
-      baseValue: 85.0,
-      predictedValue: 92.5,
-      modelConfidence: 0.92,
-      generatedAt: DateTime.now(),
-      summary:
-          'Based on its current trajectory, this animal is expected to reach '
-          '92.5 kg in 14 days. The main positive factors are strong recent '
-          'growth rate and consistent feeding schedule.',
-      recommendation:
-          'Continue current feeding regimen. Monitor water intake during hot weather. '
-          'Consider market evaluation at 100 kg.',
-      features: [
-        ShapFeature(
-          featureName: 'wf_current_weight',
-          displayName: 'Current Weight',
-          value: 85.5,
-          shapValue: 40.57,
-          explanation: 'Heavier animals tend to gain more weight',
-        ),
-        ShapFeature(
-          featureName: 'wf_adg_lifetime',
-          displayName: 'Lifetime Growth Rate',
-          value: 0.82,
-          shapValue: 1.06,
-          explanation: 'Consistent historical growth supports prediction',
-        ),
-        ShapFeature(
-          featureName: 'horizon_days',
-          displayName: 'Prediction Period',
-          value: 14.0,
-          shapValue: 0.86,
-          explanation: 'Longer periods allow more growth',
-        ),
-        ShapFeature(
-          featureName: 'wf_weight_std_30d',
-          displayName: 'Weight Variability',
-          value: 8.5,
-          shapValue: -4.88,
-          explanation: 'Inconsistent weights reduce prediction confidence',
-        ),
-        ShapFeature(
-          featureName: 'wf_weight_change_7d',
-          displayName: 'Weekly Weight Change',
-          value: 2.0,
-          shapValue: -2.61,
-          explanation: 'Recent growth below average',
-        ),
-      ],
-    );
+    return null;
   }
 
   /// Get global feature importance

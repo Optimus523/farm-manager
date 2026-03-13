@@ -1,126 +1,240 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../config/theme.dart';
 import '../../../models/ml_models.dart';
+import '../../../providers/ml_analytics_provider.dart';
 import '../widgets/widgets.dart';
 
-class WeightPredictionsTab extends StatefulWidget {
+class WeightPredictionsTab extends ConsumerStatefulWidget {
   const WeightPredictionsTab({super.key});
 
   @override
-  State<WeightPredictionsTab> createState() => _WeightPredictionsTabState();
+  ConsumerState<WeightPredictionsTab> createState() =>
+      _WeightPredictionsTabState();
 }
 
-class _WeightPredictionsTabState extends State<WeightPredictionsTab> {
-  int _forecastDays = 14;
-  final List<WeightPrediction> _predictions = [];
-  final List<GrowthDataPoint> _chartData = [];
-
-  @override
-  void initState() {
-    super.initState();
-    _loadData();
-  }
-
-  void _loadData() {
-    // Mock Data (matches original logic)
-    final now = DateTime.now();
-    _predictions.addAll([
-      WeightPrediction(
-        animalId: '1',
-        animalTagId: 'Pig-001',
-        animalName: 'Babe',
-        currentWeight: 92,
-        predictedWeight: 105,
-        predictedGain: 13,
-        horizonDays: 14,
-        predictionDate: now,
-        confidenceScore: 0.93,
-        lowerBound: 102,
-        upperBound: 108,
-        targetWeight: 100,
-        daysToTarget: 7,
-      ),
-      WeightPrediction(
-        animalId: '2',
-        animalTagId: 'Pig-003',
-        animalName: 'Wilbur',
-        currentWeight: 88,
-        predictedWeight: 101,
-        predictedGain: 13,
-        horizonDays: 14,
-        predictionDate: now,
-        confidenceScore: 0.88,
-        lowerBound: 98,
-        upperBound: 104,
-        targetWeight: 100,
-        daysToTarget: 12,
-      ),
-      WeightPrediction(
-        animalId: '3',
-        animalTagId: 'Pig-007',
-        animalName: 'Arnold',
-        currentWeight: 85,
-        predictedWeight: 98,
-        predictedGain: 13,
-        horizonDays: 14,
-        predictionDate: now,
-        confidenceScore: 0.85,
-        lowerBound: 95,
-        upperBound: 101,
-        targetWeight: 100,
-        daysToTarget: 18,
-      ),
-    ]);
-
-    // Mock chart data
-    for (int i = 30; i >= 0; i--) {
-      _chartData.add(
-        GrowthDataPoint(
-          date: now.subtract(Duration(days: i)),
-          weight: 60 + (30 - i) * 1.1 + (i % 3) * 0.5,
-          isPredicted: false,
-        ),
-      );
-    }
-    for (int i = 1; i <= 14; i++) {
-      _chartData.add(
-        GrowthDataPoint(
-          date: now.add(Duration(days: i)),
-          weight: 92 + i * 0.9,
-          isPredicted: true,
-        ),
-      );
-    }
-  }
-
+class _WeightPredictionsTabState extends ConsumerState<WeightPredictionsTab> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final mlState = ref.watch(mlAnalyticsProvider);
+    final predictions = mlState.predictions;
+    final selectedHorizon = mlState.selectedHorizon;
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _buildHorizonSelector(theme, isDark),
-        const SizedBox(height: 24),
-        _buildChartSection(theme, isDark),
-        const SizedBox(height: 24),
-        Text(
-          'Individual Predictions',
-          style: GoogleFonts.poppins(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: theme.textTheme.titleLarge?.color,
+    if (mlState.isLoading) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: AppTheme.farmGreen),
+            const SizedBox(height: 16),
+            Text(
+              'Loading predictions from ML API...',
+              style: GoogleFonts.inter(
+                color: theme.textTheme.bodyMedium?.color,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (mlState.error != null && predictions.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.cloud_off, size: 48, color: Colors.grey[400]),
+              const SizedBox(height: 16),
+              Text(
+                'Unable to Load Predictions',
+                style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: theme.textTheme.titleMedium?.color,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                mlState.error!,
+                textAlign: TextAlign.center,
+                style: GoogleFonts.inter(
+                  color: theme.textTheme.bodyMedium?.color,
+                ),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton.icon(
+                onPressed: () =>
+                    ref.read(mlAnalyticsProvider.notifier).refresh(),
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.farmGreen,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
           ),
         ),
-        const SizedBox(height: 12),
-        ..._predictions.map((p) => _buildPredictionCard(p, theme, isDark)),
-      ],
+      );
+    }
+
+    // Build chart data from predictions
+    final chartData = _buildChartData(predictions, selectedHorizon.days);
+
+    return RefreshIndicator(
+      onRefresh: () async => ref.read(mlAnalyticsProvider.notifier).refresh(),
+      color: AppTheme.farmGreen,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _buildHorizonSelector(theme, isDark, selectedHorizon),
+          const SizedBox(height: 16),
+          if (mlState.isConnected) _buildConnectionBadge(theme, isDark),
+          const SizedBox(height: 8),
+          if (chartData.isNotEmpty) ...[
+            _buildChartSection(theme, isDark, chartData),
+            const SizedBox(height: 24),
+          ],
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Individual Predictions',
+                style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: theme.textTheme.titleLarge?.color,
+                ),
+              ),
+              Text(
+                '${predictions.length} animals',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  color: theme.textTheme.bodyMedium?.color,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (predictions.isEmpty)
+            _buildEmptyState(theme)
+          else
+            ...predictions.map((p) => _buildPredictionCard(p, theme, isDark)),
+        ],
+      ),
     );
   }
 
-  Widget _buildHorizonSelector(ThemeData theme, bool isDark) {
+  Widget _buildConnectionBadge(ThemeData theme, bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppTheme.farmGreen.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: const BoxDecoration(
+              color: AppTheme.farmGreen,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            'Live predictions from ML API',
+            style: GoogleFonts.inter(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppTheme.farmGreen,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState(ThemeData theme) {
+    return Container(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        children: [
+          Icon(Icons.analytics_outlined, size: 48, color: Colors.grey[400]),
+          const SizedBox(height: 16),
+          Text(
+            'No predictions yet',
+            style: GoogleFonts.poppins(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: theme.textTheme.titleMedium?.color,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Add animals with weight records to see weight predictions.',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.inter(color: theme.textTheme.bodyMedium?.color),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<GrowthDataPoint> _buildChartData(
+    List<WeightPrediction> predictions,
+    int horizonDays,
+  ) {
+    if (predictions.isEmpty) return [];
+
+    // Use the first animal's data for the chart as a representative
+    final representative = predictions.first;
+    final now = DateTime.now();
+    final points = <GrowthDataPoint>[];
+
+    // Show current weight as a reference point
+    points.add(
+      GrowthDataPoint(
+        date: now,
+        weight: representative.currentWeight,
+        isPredicted: false,
+      ),
+    );
+
+    // Show predicted weight at horizon
+    points.add(
+      GrowthDataPoint(
+        date: now.add(Duration(days: horizonDays)),
+        weight: representative.predictedWeight,
+        isPredicted: true,
+      ),
+    );
+
+    // Add bounds as interpolated points
+    final midDate = now.add(Duration(days: horizonDays ~/ 2));
+    final midWeight =
+        representative.currentWeight +
+        (representative.predictedWeight - representative.currentWeight) / 2;
+    points.insert(
+      1,
+      GrowthDataPoint(date: midDate, weight: midWeight, isPredicted: true),
+    );
+
+    return points;
+  }
+
+  Widget _buildHorizonSelector(
+    ThemeData theme,
+    bool isDark,
+    ForecastHorizon selectedHorizon,
+  ) {
     return Container(
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
@@ -128,11 +242,15 @@ class _WeightPredictionsTabState extends State<WeightPredictionsTab> {
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
-        children: [7, 14, 30].map((days) {
-          final isSelected = _forecastDays == days;
+        children: ForecastHorizon.values.map((horizon) {
+          final isSelected = selectedHorizon == horizon;
           return Expanded(
             child: GestureDetector(
-              onTap: () => setState(() => _forecastDays = days),
+              onTap: () {
+                ref
+                    .read(mlAnalyticsProvider.notifier)
+                    .setForecastHorizon(horizon);
+              },
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 padding: const EdgeInsets.symmetric(vertical: 10),
@@ -152,7 +270,7 @@ class _WeightPredictionsTabState extends State<WeightPredictionsTab> {
                       : [],
                 ),
                 child: Text(
-                  '$days Days',
+                  '${horizon.days} Days',
                   textAlign: TextAlign.center,
                   style: GoogleFonts.inter(
                     fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
@@ -169,7 +287,11 @@ class _WeightPredictionsTabState extends State<WeightPredictionsTab> {
     );
   }
 
-  Widget _buildChartSection(ThemeData theme, bool isDark) {
+  Widget _buildChartSection(
+    ThemeData theme,
+    bool isDark,
+    List<GrowthDataPoint> chartData,
+  ) {
     return Container(
       height: 300,
       padding: const EdgeInsets.all(16),
@@ -208,7 +330,7 @@ class _WeightPredictionsTabState extends State<WeightPredictionsTab> {
             ],
           ),
           const SizedBox(height: 16),
-          Expanded(child: GrowthChart(dataPoints: _chartData)),
+          Expanded(child: GrowthChart(dataPoints: chartData)),
         ],
       ),
     );
@@ -241,6 +363,7 @@ class _WeightPredictionsTabState extends State<WeightPredictionsTab> {
   ) {
     final name = p.animalName ?? 'Unknown';
     final initial = name.isNotEmpty ? name[0] : '?';
+    final gainIsPositive = p.predictedGain >= 0;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -284,6 +407,33 @@ class _WeightPredictionsTabState extends State<WeightPredictionsTab> {
                     color: theme.textTheme.bodyMedium?.color,
                   ),
                 ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    _buildConfidenceBadge(p.confidenceScore),
+                    if (p.willReachTarget) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          'Market Ready',
+                          style: GoogleFonts.inter(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.orange[700],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ],
             ),
           ),
@@ -299,16 +449,51 @@ class _WeightPredictionsTabState extends State<WeightPredictionsTab> {
                 ),
               ),
               Text(
-                '+${p.predictedGain.toStringAsFixed(1)} kg',
+                '${gainIsPositive ? "+" : ""}${p.predictedGain.toStringAsFixed(1)} kg',
                 style: GoogleFonts.inter(
                   fontSize: 12,
-                  color: Colors.green,
+                  color: gainIsPositive ? Colors.green : Colors.red,
                   fontWeight: FontWeight.w600,
+                ),
+              ),
+              Text(
+                'from ${p.currentWeight.toStringAsFixed(1)} kg',
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  color: theme.textTheme.bodySmall?.color,
                 ),
               ),
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildConfidenceBadge(double confidence) {
+    final percentage = (confidence * 100).round();
+    Color color;
+    if (confidence >= 0.85) {
+      color = Colors.green;
+    } else if (confidence >= 0.7) {
+      color = Colors.orange;
+    } else {
+      color = Colors.red;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        '$percentage% conf.',
+        style: GoogleFonts.inter(
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
       ),
     );
   }

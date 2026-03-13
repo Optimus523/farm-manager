@@ -3,19 +3,36 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:manage/providers/auth_providers.dart';
+import 'package:manage/utils/env_helper.dart';
 
-/// Configuration for the Memory API
+/// Configuration for the Memory API.
+///
+/// Uses the `BASE_URL` environment variable to construct the memory API endpoint.
+/// Set `BASE_URL` in your `.env` file or via `--dart-define=BASE_URL=...`
+///
+/// Note: Free tier backends may spin down after inactivity.
+/// Cold starts can take 50+ seconds.
 class MemoryApiConfig {
+  /// Default production backend URL
+  static const String _defaultBaseUrl =
+      'https://farm-manager-nxvx.onrender.com';
+  static const String _memoryPath = '/api/v1/memory';
+
+  /// Timeout for cold start requests (backend may need to spin up)
+  static const Duration coldStartTimeout = Duration(seconds: 90);
+
+  /// Timeout for normal requests (backend is already warm)
+  static const Duration normalTimeout = Duration(seconds: 30);
+
+  /// Returns the full memory API URL.
+  /// Constructs from `BASE_URL` environment variable + memory path.
+  /// Falls back to production URL if env var is not set.
   static String get baseUrl {
-    if (kIsWeb) {
-      return 'http://127.0.0.1:8000/api/v1/memory';
-    }
-    // Android emulator uses 10.0.2.2 to reach host machine's localhost
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:8000/api/v1/memory';
-    }
-    // Linux, Windows, macOS desktop — backend runs on the same machine
-    return 'http://127.0.0.1:8000/api/v1/memory';
+    final envBaseUrl = EnvHelper.get('BASE_URL');
+    final base = (envBaseUrl != null && envBaseUrl.isNotEmpty)
+        ? envBaseUrl
+        : _defaultBaseUrl;
+    return '$base$_memoryPath';
   }
 }
 
@@ -239,14 +256,25 @@ class ExtractMemoriesResponse {
   bool get hasMemories => memories.isNotEmpty;
 }
 
-/// Service for interacting with the Memory API
+/// Service for interacting with the Memory API.
+///
+/// Handles cold start delays from free-tier backend hosts.
 class MemoryService {
   final String baseUrl;
   final http.Client _client;
+  final Duration timeout;
 
-  MemoryService({String? baseUrl, http.Client? client})
+  /// Whether the backend has been confirmed as active this session
+  bool _isWarm = false;
+
+  MemoryService({String? baseUrl, http.Client? client, Duration? timeout})
     : baseUrl = baseUrl ?? MemoryApiConfig.baseUrl,
-      _client = client ?? http.Client();
+      _client = client ?? http.Client(),
+      timeout = timeout ?? MemoryApiConfig.coldStartTimeout;
+
+  /// Get the appropriate timeout based on whether backend is warm
+  Duration get _currentTimeout =>
+      _isWarm ? MemoryApiConfig.normalTimeout : timeout;
 
   String getContainerTag(String userId) => 'user-$userId';
 
@@ -282,16 +310,19 @@ class MemoryService {
     String? category,
   }) async {
     try {
-      final response = await _client.post(
-        Uri.parse('$baseUrl/add'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'container_tag': containerTag,
-          'content': content,
-          'memory_type': memoryType,
-          if (category != null) 'category': category,
-        }),
-      );
+      final response = await _client
+          .post(
+            Uri.parse('$baseUrl/add'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'container_tag': containerTag,
+              'content': content,
+              'memory_type': memoryType,
+              if (category != null) 'category': category,
+            }),
+          )
+          .timeout(_currentTimeout);
+      _isWarm = true; // Backend responded
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         return AddMemoryResponse.fromJson(jsonDecode(response.body));
@@ -315,23 +346,31 @@ class MemoryService {
     required String containerTag,
     required String query,
     int limit = 10,
-    double threshold = 0.4,  // Lowered from 0.7 - semantic similarity often ranges 0.4-0.7
+    double threshold =
+        0.4, // Lowered from 0.7 - semantic similarity often ranges 0.4-0.7
   }) async {
     try {
-      debugPrint('Searching memories: container=$containerTag, query="${query.substring(0, query.length > 50 ? 50 : query.length)}...", threshold=$threshold');
-      final response = await _client.post(
-        Uri.parse('$baseUrl/search'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'container_tag': containerTag,
-          'query': query,
-          'limit': limit,
-          'threshold': threshold,
-        }),
+      debugPrint(
+        'Searching memories: container=$containerTag, query="${query.substring(0, query.length > 50 ? 50 : query.length)}...", threshold=$threshold',
       );
+      final response = await _client
+          .post(
+            Uri.parse('$baseUrl/search'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'container_tag': containerTag,
+              'query': query,
+              'limit': limit,
+              'threshold': threshold,
+            }),
+          )
+          .timeout(_currentTimeout);
+      _isWarm = true; // Backend responded
 
       if (response.statusCode == 200) {
-        final result = SearchMemoriesResponse.fromJson(jsonDecode(response.body));
+        final result = SearchMemoriesResponse.fromJson(
+          jsonDecode(response.body),
+        );
         debugPrint('Memory search returned ${result.results.length} results');
         return result;
       } else {
@@ -355,18 +394,23 @@ class MemoryService {
   }) async {
     try {
       debugPrint('Extracting memories for container: $containerTag');
-      final response = await _client.post(
-        Uri.parse('$baseUrl/extract'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'container_tag': containerTag,
-          'content': content,
-          'context': context,
-        }),
-      );
+      final response = await _client
+          .post(
+            Uri.parse('$baseUrl/extract'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'container_tag': containerTag,
+              'content': content,
+              'context': context,
+            }),
+          )
+          .timeout(_currentTimeout);
+      _isWarm = true; // Backend responded
 
       if (response.statusCode == 200) {
-        final result = ExtractMemoriesResponse.fromJson(jsonDecode(response.body));
+        final result = ExtractMemoriesResponse.fromJson(
+          jsonDecode(response.body),
+        );
         debugPrint('Extracted ${result.extractedCount} memories successfully');
         return result;
       } else {

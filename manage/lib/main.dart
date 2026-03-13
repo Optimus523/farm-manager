@@ -10,6 +10,7 @@ import 'config/supabase_config.dart';
 import 'config/theme.dart';
 import 'providers/auth_providers.dart';
 import 'providers/connectivity_provider.dart';
+import 'providers/ml_analytics_provider.dart';
 import 'providers/theme_provider.dart';
 import 'router/app_router.dart';
 import 'services/connectivity_service.dart';
@@ -86,6 +87,9 @@ class _MyAppState extends ConsumerState<MyApp> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setupAuthListener();
+      // Pre-warm the ML backend (free tier may be sleeping)
+      // This runs async in background, no blocking
+      ref.read(mlWarmUpProvider);
     });
   }
 

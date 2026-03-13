@@ -9,7 +9,10 @@ class EnvHelper {
   static const _supabaseAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
   static const _googleWebClient = String.fromEnvironment('GOOGLE_WEB_CLIENT');
   static const _geminiApiKey = String.fromEnvironment('GEMINI_API_KEY');
-  static const _featherlessApiKey = String.fromEnvironment('FEATHERLESS_API_KEY');
+  static const _featherlessApiKey = String.fromEnvironment(
+    'FEATHERLESS_API_KEY',
+  );
+  static const _baseUrl = String.fromEnvironment('BASE_URL');
 
   /// Mark dotenv as initialized (call after successful dotenv.load())
   static void markDotenvInitialized() {
@@ -53,6 +56,8 @@ class EnvHelper {
         return _geminiApiKey.isNotEmpty ? _geminiApiKey : null;
       case 'FEATHERLESS_API_KEY':
         return _featherlessApiKey.isNotEmpty ? _featherlessApiKey : null;
+      case 'BASE_URL':
+        return _baseUrl.isNotEmpty ? _baseUrl : null;
       default:
         return null;
     }

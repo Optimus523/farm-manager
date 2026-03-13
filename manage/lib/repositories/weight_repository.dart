@@ -103,6 +103,18 @@ class WeightRepository {
     await _client.from(_table).delete().eq('id', id);
   }
 
+  /// Get all weight records for a farm (direct query, not stream)
+  Future<List<WeightRecord>> getWeightRecords(String farmId) async {
+    final response = await _client
+        .from(_table)
+        .select()
+        .eq('farm_id', farmId)
+        .order('date', ascending: false);
+    return (response as List)
+        .map((json) => WeightRecord.fromSupabase(json))
+        .toList();
+  }
+
   /// Get weight history for an animal
   Future<List<WeightRecord>> getWeightHistoryForAnimal(String animalId) async {
     final response = await _client

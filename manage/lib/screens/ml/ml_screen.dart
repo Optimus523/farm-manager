@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../utils/seo_helper.dart';
 import '../../providers/providers.dart';
+import '../../providers/ml_analytics_provider.dart';
+import '../../router/app_router.dart';
 
 class MLScreen extends ConsumerStatefulWidget {
   const MLScreen({super.key});
@@ -25,6 +27,37 @@ class _MLScreenState extends ConsumerState<MLScreen> {
     final feedingRecordsAsync = ref.watch(feedingRecordsProvider);
     final breedingRecordsAsync = ref.watch(breedingRecordsProvider);
 
+    // Watch ML backend status
+    final mlHealth = ref.watch(mlHealthProvider);
+    final weightModelInfo = ref.watch(mlModelInfoProvider);
+    final healthModelInfo = ref.watch(mlHealthModelInfoProvider);
+    final mlState = ref.watch(mlAnalyticsProvider);
+
+    // Determine model statuses from backend
+    final weightStatus = weightModelInfo.when(
+      data: (info) =>
+          info.isLoaded ? MLModelStatus.ready : MLModelStatus.notTrained,
+      loading: () => MLModelStatus.training,
+      error: (_, _) => MLModelStatus.error,
+    );
+
+    final healthStatus = healthModelInfo.when(
+      data: (info) =>
+          info.isLoaded ? MLModelStatus.ready : MLModelStatus.notTrained,
+      loading: () => MLModelStatus.training,
+      error: (_, _) => MLModelStatus.error,
+    );
+
+    final isBackendConnected = mlHealth.when(
+      data: (status) => status.isHealthy,
+      loading: () => false,
+      error: (_, _) => false,
+    );
+
+    final modelsReady =
+        (weightStatus == MLModelStatus.ready ? 1 : 0) +
+        (healthStatus == MLModelStatus.ready ? 1 : 0);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('ML Analytics'),
@@ -32,14 +65,13 @@ class _MLScreenState extends ConsumerState<MLScreen> {
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () {
-              // Refresh all providers
-              ref.invalidate(animalsProvider);
-              ref.invalidate(weightRecordsProvider);
-              ref.invalidate(feedingRecordsProvider);
-              ref.invalidate(breedingRecordsProvider);
+              ref.invalidate(mlHealthProvider);
+              ref.invalidate(mlModelInfoProvider);
+              ref.invalidate(mlHealthModelInfoProvider);
+              ref.read(mlAnalyticsProvider.notifier).refresh();
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: const Text('Data refreshed'),
+                  content: const Text('Refreshing ML data...'),
                   behavior: SnackBarBehavior.floating,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10),
@@ -55,6 +87,10 @@ class _MLScreenState extends ConsumerState<MLScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Connection Status Banner
+            _buildConnectionBanner(context, isBackendConnected),
+            const SizedBox(height: 16),
+
             // Header Section
             _buildHeaderCard(
               context,
@@ -62,6 +98,8 @@ class _MLScreenState extends ConsumerState<MLScreen> {
               weightRecordsAsync,
               feedingRecordsAsync,
               breedingRecordsAsync,
+              modelsReady,
+              mlState.predictions.length,
             ),
             const SizedBox(height: 24),
 
@@ -74,10 +112,18 @@ class _MLScreenState extends ConsumerState<MLScreen> {
             _buildMLCard(
               context,
               title: 'Growth Forecast',
-              description: 'Predict future weight based on historical data',
+              description: weightStatus == MLModelStatus.ready
+                  ? 'Model loaded - Tap to view predictions'
+                  : 'Predict future weight based on historical data',
               icon: Icons.trending_up,
               color: Colors.blue,
-              status: MLModelStatus.notTrained,
+              status: weightStatus,
+              subtitle: weightModelInfo.whenOrNull(
+                data: (info) => info.isLoaded
+                    ? 'R\u00B2: ${((info.accuracy ?? 0) * 100).toStringAsFixed(1)}% | MAE: ${info.mae?.toStringAsFixed(1) ?? "N/A"} kg'
+                    : null,
+              ),
+              onTap: () => coordinator.push(MLRoute()),
             ),
             const SizedBox(height: 24),
 
@@ -90,10 +136,18 @@ class _MLScreenState extends ConsumerState<MLScreen> {
             _buildMLCard(
               context,
               title: 'Health Risk Assessment',
-              description: 'Identify animals at risk based on patterns',
+              description: healthStatus == MLModelStatus.ready
+                  ? 'Model loaded - Tap to view health analytics'
+                  : 'Identify animals at risk based on patterns',
               icon: Icons.health_and_safety,
               color: Colors.red,
-              status: MLModelStatus.notTrained,
+              status: healthStatus,
+              subtitle: healthModelInfo.whenOrNull(
+                data: (info) => info.isLoaded
+                    ? 'Risk + Treatment + Decline models | ${info.samples ?? 0} samples'
+                    : null,
+              ),
+              onTap: () => coordinator.push(MLRoute()),
             ),
             const SizedBox(height: 24),
 
@@ -137,15 +191,6 @@ class _MLScreenState extends ConsumerState<MLScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Visualization Placeholder Section
-            Text(
-              'Visualizations',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 12),
-            _buildVisualizationPlaceholder(context),
-            const SizedBox(height: 24),
-
             // Data Summary Section
             Text('Data Summary', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 12),
@@ -162,49 +207,91 @@ class _MLScreenState extends ConsumerState<MLScreen> {
     );
   }
 
+  Widget _buildConnectionBanner(BuildContext context, bool isConnected) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: isConnected
+            ? Colors.green.withValues(alpha: 0.1)
+            : Colors.orange.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isConnected
+              ? Colors.green.withValues(alpha: 0.3)
+              : Colors.orange.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(
+              color: isConnected ? Colors.green : Colors.orange,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isConnected ? 'ML Backend Connected' : 'ML Backend Offline',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: isConnected ? Colors.green[700] : Colors.orange[700],
+                  ),
+                ),
+                Text(
+                  isConnected
+                      ? 'Connected to cloud backend'
+                      : 'Backend unavailable',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isConnected ? Colors.green[600] : Colors.orange[600],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (isConnected)
+            TextButton(
+              onPressed: () => coordinator.push(MLRoute()),
+              child: const Text('View Analytics'),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildHeaderCard(
     BuildContext context,
     AsyncValue animalsAsync,
     AsyncValue weightRecordsAsync,
     AsyncValue feedingRecordsAsync,
     AsyncValue breedingRecordsAsync,
+    int modelsReady,
+    int predictionsCount,
   ) {
-    // Calculate total predictions (placeholder for now)
-    final totalData = animalsAsync.maybeWhen(
-      data: (animals) => animals.length,
-      orElse: () => 0,
-    );
-    final weightData = weightRecordsAsync.maybeWhen(
-      data: (records) => records.length,
-      orElse: () => 0,
-    );
-    final feedingData = feedingRecordsAsync.maybeWhen(
-      data: (records) => records.length,
-      orElse: () => 0,
-    );
-    final breedingData = breedingRecordsAsync.maybeWhen(
-      data: (records) => records.length,
-      orElse: () => 0,
-    );
-    
-    final totalRecords = totalData + weightData + feedingData + breedingData;
-    final modelsReady = 0; // Placeholder until ML models are integrated
-    final predictionsCount = 0; // Placeholder
+    final totalData =
+        animalsAsync.maybeWhen(
+          data: (animals) => animals.length,
+          orElse: () => 0,
+        ) +
+        weightRecordsAsync.maybeWhen(
+          data: (records) => records.length,
+          orElse: () => 0,
+        ) +
+        feedingRecordsAsync.maybeWhen(
+          data: (records) => records.length,
+          orElse: () => 0,
+        ) +
+        breedingRecordsAsync.maybeWhen(
+          data: (records) => records.length,
+          orElse: () => 0,
+        );
 
-    return _buildHeaderCardInternal(
-      context,
-      modelsReady,
-      predictionsCount,
-      totalRecords,
-    );
-  }
-
-  Widget _buildHeaderCardInternal(
-    BuildContext context,
-    int models,
-    int predictions,
-    int totalRecords,
-  ) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -257,19 +344,19 @@ class _MLScreenState extends ConsumerState<MLScreen> {
                 _buildStatItem(
                   context,
                   'Models',
-                  '$models',
+                  '$modelsReady',
                   Icons.model_training,
                 ),
                 _buildStatItem(
                   context,
                   'Predictions',
-                  '$predictions',
+                  '$predictionsCount',
                   Icons.analytics,
                 ),
                 _buildStatItem(
                   context,
                   'Records',
-                  '$totalRecords',
+                  '$totalData',
                   Icons.data_usage,
                 ),
               ],
@@ -313,6 +400,8 @@ class _MLScreenState extends ConsumerState<MLScreen> {
     required IconData icon,
     required Color color,
     required MLModelStatus status,
+    String? subtitle,
+    VoidCallback? onTap,
   }) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -326,20 +415,38 @@ class _MLScreenState extends ConsumerState<MLScreen> {
           child: Icon(icon, color: color),
         ),
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
-        subtitle: Text(description),
-        trailing: _buildStatusChip(status),
-        onTap: () {
-          // TODO: Navigate to model details or run prediction
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('$title - Coming soon!'),
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(description),
+            if (subtitle != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  subtitle,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.teal[600],
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
               ),
-            ),
-          );
-        },
+          ],
+        ),
+        trailing: _buildStatusChip(status),
+        onTap:
+            onTap ??
+            () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('$title - Coming soon!'),
+                  behavior: SnackBarBehavior.floating,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              );
+            },
       ),
     );
   }
@@ -356,16 +463,16 @@ class _MLScreenState extends ConsumerState<MLScreen> {
         icon = Icons.hourglass_empty;
       case MLModelStatus.training:
         color = Colors.orange;
-        label = 'Training';
+        label = 'Loading...';
         icon = Icons.sync;
       case MLModelStatus.ready:
         color = Colors.green;
         label = 'Ready';
-        icon = Icons.check;
+        icon = Icons.check_circle;
       case MLModelStatus.error:
         color = Colors.red;
-        label = 'Error';
-        icon = Icons.error;
+        label = 'Offline';
+        icon = Icons.cloud_off;
     }
 
     return Container(
@@ -389,58 +496,6 @@ class _MLScreenState extends ConsumerState<MLScreen> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildVisualizationPlaceholder(BuildContext context) {
-    return Card(
-      child: Container(
-        height: 250,
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.insert_chart_outlined,
-              size: 64,
-              color: Colors.grey[400],
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Charts & Graphs',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(color: Colors.grey[600]),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Visualizations will appear here once ML models are trained',
-              textAlign: TextAlign.center,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: Colors.grey[500]),
-            ),
-            const SizedBox(height: 16),
-            OutlinedButton.icon(
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: const Text(
-                      'Sample visualizations will be available once ML models are trained',
-                    ),
-                    behavior: SnackBarBehavior.floating,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.visibility),
-              label: const Text('Preview Sample'),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -469,22 +524,6 @@ class _MLScreenState extends ConsumerState<MLScreen> {
       orElse: () => 0,
     );
 
-    return _buildDataSummaryCardInternal(
-      context,
-      animalCount,
-      weightCount,
-      feedingCount,
-      breedingCount,
-    );
-  }
-
-  Widget _buildDataSummaryCardInternal(
-    BuildContext context,
-    int animalCount,
-    int weightCount,
-    int feedingCount,
-    int breedingCount,
-  ) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -525,84 +564,6 @@ class _MLScreenState extends ConsumerState<MLScreen> {
               'Breeding Records',
               '$breedingCount records',
               Icons.family_restroom,
-            ),
-            const Divider(height: 24),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () async {
-                      // Show export options
-                      final format = await showDialog<String>(
-                        context: context,
-                        builder: (context) => AlertDialog(
-                          title: const Text('Export Data'),
-                          content: const Text(
-                            'Choose export format for ML training data',
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(context),
-                              child: const Text('Cancel'),
-                            ),
-                            TextButton(
-                              onPressed: () => Navigator.pop(context, 'csv'),
-                              child: const Text('CSV'),
-                            ),
-                            TextButton(
-                              onPressed: () => Navigator.pop(context, 'json'),
-                              child: const Text('JSON'),
-                            ),
-                          ],
-                        ),
-                      );
-                      if (format != null && context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('Exporting data as ${format.toUpperCase()}...'),
-                            behavior: SnackBarBehavior.floating,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                          ),
-                        );
-                        // TODO: Implement actual export functionality
-                        // This would use ExportService to export all data
-                      }
-                    },
-                    icon: const Icon(Icons.download),
-                    label: const Text('Export Data'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: animalCount > 0 && weightCount > 0
-                        ? () {
-                            // Show training dialog
-                            showDialog(
-                              context: context,
-                              builder: (context) => AlertDialog(
-                                title: const Text('Train ML Models'),
-                                content: const Text(
-                                  'Model training requires connection to the ML backend service. '
-                                  'This feature will be available once the backend is configured.',
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(context),
-                                    child: const Text('OK'),
-                                  ),
-                                ],
-                              ),
-                            );
-                          }
-                        : null,
-                    icon: const Icon(Icons.play_arrow),
-                    label: const Text('Train Models'),
-                  ),
-                ),
-              ],
             ),
           ],
         ),

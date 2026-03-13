@@ -2,18 +2,63 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/ml_models.dart';
+import '../utils/env_helper.dart';
 
-/// ML API Service
+/// ML API Service for weight predictions and health analytics.
+///
+/// Connects to the backend specified by the `BASE_URL` environment variable.
+/// Set `BASE_URL` in your `.env` file or via `--dart-define=BASE_URL=...`
+///
+/// Note: Free tier backends (e.g., Render) may spin down after inactivity.
+/// Cold starts can take 50+ seconds. Use [wakeUp] to pre-warm the backend.
 class MLService {
+  /// Default production backend URL (used when BASE_URL env var is not set)
+  static const String _defaultBaseUrl =
+      'https://farm-manager-nxvx.onrender.com';
+
+  /// Timeout for cold start requests (backend may need to spin up)
+  static const Duration coldStartTimeout = Duration(seconds: 90);
+
+  /// Timeout for normal requests (backend is already warm)
+  static const Duration normalTimeout = Duration(seconds: 30);
+
   final String baseUrl;
   final http.Client _client;
   final Duration timeout;
 
+  /// Whether the backend has been confirmed as active this session
+  bool _isWarm = false;
+
+  /// Creates an ML service instance.
+  ///
+  /// [baseUrl] - The backend API URL. Defaults to `BASE_URL` env variable,
+  ///             falls back to production URL if not set.
+  /// [client] - Optional HTTP client for testing.
+  /// [timeout] - Request timeout duration. Defaults to [coldStartTimeout]
+  ///             to handle free-tier backend spin-up delays.
   MLService({
-    this.baseUrl = 'http://127.0.0.1:8000',
+    String? baseUrl,
     http.Client? client,
-    this.timeout = const Duration(seconds: 30),
-  }) : _client = client ?? http.Client();
+    this.timeout = coldStartTimeout,
+  }) : baseUrl = baseUrl ?? EnvHelper.get('BASE_URL') ?? _defaultBaseUrl,
+       _client = client ?? http.Client();
+
+  /// Wake up the backend if it's sleeping (free tier spin-down).
+  /// Call this on app startup to minimize delay for user requests.
+  /// Returns true if backend is responsive, false otherwise.
+  Future<bool> wakeUp() async {
+    try {
+      final health = await checkHealth();
+      _isWarm = health.isHealthy;
+      return _isWarm;
+    } catch (e) {
+      _isWarm = false;
+      return false;
+    }
+  }
+
+  /// Get the appropriate timeout based on whether backend is warm
+  Duration get _currentTimeout => _isWarm ? normalTimeout : timeout;
 
   /// Check if the API server is running
   Future<MLHealthStatus> checkHealth() async {
@@ -29,27 +74,21 @@ class MLService {
     }
   }
 
-  /// Check database connectivity
-  Future<MLDatabaseStatus> checkDatabaseHealth() async {
-    final response = await _get('/health/db');
-    return MLDatabaseStatus.fromJson(response);
-  }
-
   /// Compute weight features for a single animal
   Future<WeightFeatures> computeWeightFeatures(String animalId) async {
-    final response = await _post('/api/v1/features/weight/$animalId', {});
+    final response = await _get('/api/v1/features/weight/$animalId');
     return WeightFeatures.fromJson(response);
   }
 
   /// Compute health features for a single animal
   Future<HealthFeatures> computeHealthFeatures(String animalId) async {
-    final response = await _post('/api/v1/features/health/$animalId', {});
+    final response = await _get('/api/v1/features/health/$animalId');
     return HealthFeatures.fromJson(response);
   }
 
   /// Compute all features (weight + health) for a single animal
   Future<CombinedFeatures> computeCombinedFeatures(String animalId) async {
-    final response = await _post('/api/v1/features/combined/$animalId', {});
+    final response = await _get('/api/v1/features/animal/$animalId');
     return CombinedFeatures.fromJson(response);
   }
 
@@ -125,6 +164,52 @@ class MLService {
     return MLFeatureImportanceResponse.fromJson(response);
   }
 
+  // =========================================================================
+  // Health Model Endpoints
+  // =========================================================================
+
+  /// Predict health risk for a single animal
+  Future<MLHealthPredictionResponse> predictHealthRisk({
+    required Map<String, dynamic> features,
+    int horizonDays = 14,
+  }) async {
+    final response = await _post('/api/v1/models/health/predict', {
+      'features': features,
+      'horizon_days': horizonDays,
+    });
+    return MLHealthPredictionResponse.fromJson(response);
+  }
+
+  /// Predict health risk for multiple animals (batch)
+  Future<MLHealthBatchPredictionResponse> predictHealthRiskBatch({
+    required List<Map<String, dynamic>> featuresList,
+    int horizonDays = 14,
+  }) async {
+    final response = await _post('/api/v1/models/health/predict-batch', {
+      'features_list': featuresList,
+      'horizon_days': horizonDays,
+    });
+    return MLHealthBatchPredictionResponse.fromJson(response);
+  }
+
+  /// Get information about the health model
+  Future<MLHealthModelInfo> getHealthModelInfo() async {
+    final response = await _get('/api/v1/models/health/info');
+    return MLHealthModelInfo.fromJson(response);
+  }
+
+  /// Get SHAP explanation for a health prediction
+  Future<MLExplanationResponse> explainHealthPrediction({
+    required Map<String, dynamic> features,
+    int horizonDays = 14,
+  }) async {
+    final response = await _post('/api/v1/models/health/explain', {
+      'features': features,
+      'horizon_days': horizonDays,
+    });
+    return MLExplanationResponse.fromJson(response);
+  }
+
   /// Get MLflow status
   Future<MLFlowStatus> getMLflowStatus() async {
     final response = await _get('/api/v1/mlflow/status');
@@ -139,7 +224,8 @@ class MLService {
 
   Future<Map<String, dynamic>> _get(String path) async {
     final uri = Uri.parse('$baseUrl$path');
-    final response = await _client.get(uri).timeout(timeout);
+    final response = await _client.get(uri).timeout(_currentTimeout);
+    _isWarm = true; // Backend responded, mark as warm
     return _handleResponse(response);
   }
 
@@ -154,7 +240,8 @@ class MLService {
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode(body),
         )
-        .timeout(timeout);
+        .timeout(_currentTimeout);
+    _isWarm = true; // Backend responded, mark as warm
     return _handleResponse(response);
   }
 
@@ -775,6 +862,106 @@ class MLFlowRun {
           (k, v) => MapEntry(k as String, (v as num).toDouble()),
         ),
       ),
+    );
+  }
+}
+
+/// Health model prediction response
+class MLHealthPredictionResponse {
+  final int horizonDays;
+  final int currentHealthScore;
+  final double predictedRiskScore;
+  final String riskLevel;
+  final double treatmentProbability;
+  final bool treatmentLikely;
+  final double predictedScoreDelta;
+  final bool healthDeclining;
+  final String trend;
+
+  MLHealthPredictionResponse({
+    required this.horizonDays,
+    required this.currentHealthScore,
+    required this.predictedRiskScore,
+    required this.riskLevel,
+    required this.treatmentProbability,
+    required this.treatmentLikely,
+    required this.predictedScoreDelta,
+    required this.healthDeclining,
+    required this.trend,
+  });
+
+  factory MLHealthPredictionResponse.fromJson(Map<String, dynamic> json) {
+    return MLHealthPredictionResponse(
+      horizonDays: (json['horizon_days'] as num).toInt(),
+      currentHealthScore: (json['current_health_score'] as num).toInt(),
+      predictedRiskScore: (json['predicted_risk_score'] as num).toDouble(),
+      riskLevel: json['risk_level'] as String,
+      treatmentProbability: (json['treatment_probability'] as num).toDouble(),
+      treatmentLikely: json['treatment_likely'] as bool,
+      predictedScoreDelta: (json['predicted_score_delta'] as num).toDouble(),
+      healthDeclining: json['health_declining'] as bool,
+      trend: json['trend'] as String,
+    );
+  }
+}
+
+/// Batch health prediction response
+class MLHealthBatchPredictionResponse {
+  final List<MLHealthPredictionResponse> predictions;
+  final int count;
+
+  MLHealthBatchPredictionResponse({
+    required this.predictions,
+    required this.count,
+  });
+
+  factory MLHealthBatchPredictionResponse.fromJson(Map<String, dynamic> json) {
+    return MLHealthBatchPredictionResponse(
+      predictions: (json['predictions'] as List)
+          .map(
+            (p) =>
+                MLHealthPredictionResponse.fromJson(p as Map<String, dynamic>),
+          )
+          .toList(),
+      count: (json['count'] as num).toInt(),
+    );
+  }
+}
+
+/// Health model info response
+class MLHealthModelInfo {
+  final String status;
+  final bool hasRiskModel;
+  final bool hasTreatmentModel;
+  final bool hasDeclineModel;
+  final DateTime? trainedAt;
+  final int? samples;
+  final int? featureCount;
+
+  MLHealthModelInfo({
+    required this.status,
+    required this.hasRiskModel,
+    required this.hasTreatmentModel,
+    required this.hasDeclineModel,
+    this.trainedAt,
+    this.samples,
+    this.featureCount,
+  });
+
+  bool get isLoaded => status == 'loaded';
+  bool get hasAnyModel => hasRiskModel || hasTreatmentModel || hasDeclineModel;
+
+  factory MLHealthModelInfo.fromJson(Map<String, dynamic> json) {
+    return MLHealthModelInfo(
+      status: json['status'] as String,
+      hasRiskModel: json['risk_model'] as bool? ?? false,
+      hasTreatmentModel: json['treatment_model'] as bool? ?? false,
+      hasDeclineModel: json['decline_model'] as bool? ?? false,
+      trainedAt: json['trained_at'] != null
+          ? DateTime.parse(json['trained_at'] as String)
+          : null,
+      samples: (json['samples'] as num?)?.toInt(),
+      featureCount: (json['feature_count'] as num?)?.toInt(),
     );
   }
 }
