@@ -6,6 +6,7 @@ import '../../providers/paginated_health_provider.dart';
 import '../../providers/providers.dart';
 import '../../utils/responsive_layout.dart';
 import '../../utils/seo_helper.dart';
+import '../../widgets/search_bar_widget.dart';
 import 'add_health_record_dialog.dart';
 import 'health_record_detail_dialog.dart';
 
@@ -20,6 +21,7 @@ class _HealthScreenState extends ConsumerState<HealthScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final ScrollController _scrollController = ScrollController();
+  String _searchQuery = '';
 
   @override
   void initState() {
@@ -106,15 +108,52 @@ class _HealthScreenState extends ConsumerState<HealthScreen>
     return animalsAsync.when(
       data: (animals) {
         final animalMap = {for (var a in animals) a.id: a};
-        return RefreshIndicator(
-          onRefresh: () => ref.read(paginatedHealthProvider.notifier).refresh(),
-          child: _buildPaginatedResponsiveList(
-            records: healthState.records,
-            animalMap: animalMap,
-            state: healthState,
-            onTap: (record, animal) =>
-                _showRecordDetail(context, record, animal),
-          ),
+
+        // Filter records based on search query
+        final filteredRecords = _searchQuery.isEmpty
+            ? healthState.records
+            : healthState.records.where((record) {
+                final query = _searchQuery.toLowerCase();
+                final animal = animalMap[record.animalId];
+                return (animal?.tagId.toLowerCase().contains(query) ?? false) ||
+                    (animal?.name?.toLowerCase().contains(query) ?? false) ||
+                    record.type.name.toLowerCase().contains(query) ||
+                    record.title.toLowerCase().contains(query) ||
+                    (record.description?.toLowerCase().contains(query) ??
+                        false) ||
+                    (record.veterinarianName?.toLowerCase().contains(query) ??
+                        false);
+              }).toList();
+
+        final filteredState = healthState.copyWith(records: filteredRecords);
+
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: SearchBarWidget(
+                hintText: 'Search by animal, type, description, vet...',
+                onChanged: (query) {
+                  setState(() {
+                    _searchQuery = query;
+                  });
+                },
+              ),
+            ),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: () =>
+                    ref.read(paginatedHealthProvider.notifier).refresh(),
+                child: _buildPaginatedResponsiveList(
+                  records: filteredRecords,
+                  animalMap: animalMap,
+                  state: filteredState,
+                  onTap: (record, animal) =>
+                      _showRecordDetail(context, record, animal),
+                ),
+              ),
+            ),
+          ],
         );
       },
       loading: () => const Center(child: CircularProgressIndicator()),

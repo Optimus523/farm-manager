@@ -774,7 +774,6 @@ class _QuickAction extends StatelessWidget {
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
-  final String? badge;
 
   const _QuickAction({
     required this.title,
@@ -782,7 +781,6 @@ class _QuickAction extends StatelessWidget {
     required this.icon,
     required this.color,
     required this.onTap,
-    this.badge,
   });
 
   @override
@@ -830,29 +828,6 @@ class _QuickAction extends StatelessWidget {
                 ),
               ),
             ),
-            if (badge != null)
-              Positioned(
-                top: 4,
-                right: 4,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.orange,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    badge!,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 8,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
           ],
         ),
       ),

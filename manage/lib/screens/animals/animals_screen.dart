@@ -5,6 +5,7 @@ import '../../providers/paginated_animals_provider.dart';
 import '../../router/app_router.dart';
 import '../../utils/responsive_layout.dart';
 import '../../utils/seo_helper.dart';
+import '../../widgets/search_bar_widget.dart';
 import 'add_animal_dialog.dart';
 
 class AnimalsScreen extends ConsumerStatefulWidget {
@@ -16,6 +17,7 @@ class AnimalsScreen extends ConsumerStatefulWidget {
 
 class _AnimalsScreenState extends ConsumerState<AnimalsScreen> {
   final ScrollController _scrollController = ScrollController();
+  String _searchQuery = '';
 
   @override
   void initState() {
@@ -65,9 +67,40 @@ class _AnimalsScreenState extends ConsumerState<AnimalsScreen> {
       return _buildEmptyState(context);
     }
 
-    return RefreshIndicator(
-      onRefresh: () => ref.read(paginatedAnimalsProvider.notifier).refresh(),
-      child: _buildAnimalList(context, state),
+    // Filter animals based on search query
+    final filteredAnimals = _searchQuery.isEmpty
+        ? state.animals
+        : state.animals.where((animal) {
+            final query = _searchQuery.toLowerCase();
+            return animal.tagId.toLowerCase().contains(query) ||
+                (animal.name?.toLowerCase().contains(query) ?? false) ||
+                animal.species.displayName.toLowerCase().contains(query) ||
+                (animal.breed?.toLowerCase().contains(query) ?? false);
+          }).toList();
+
+    final filteredState = state.copyWith(animals: filteredAnimals);
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: SearchBarWidget(
+            hintText: 'Search by tag, name, species, or breed...',
+            onChanged: (query) {
+              setState(() {
+                _searchQuery = query;
+              });
+            },
+          ),
+        ),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: () =>
+                ref.read(paginatedAnimalsProvider.notifier).refresh(),
+            child: _buildAnimalList(context, filteredState),
+          ),
+        ),
+      ],
     );
   }
 

@@ -6,6 +6,7 @@ import '../../providers/paginated_weight_provider.dart';
 import '../../providers/providers.dart';
 import '../../utils/responsive_layout.dart';
 import '../../utils/seo_helper.dart';
+import '../../widgets/search_bar_widget.dart';
 import 'add_weight_dialog.dart';
 
 class WeightScreen extends ConsumerStatefulWidget {
@@ -17,6 +18,7 @@ class WeightScreen extends ConsumerStatefulWidget {
 
 class _WeightScreenState extends ConsumerState<WeightScreen> {
   final ScrollController _scrollController = ScrollController();
+  String _searchQuery = '';
 
   @override
   void initState() {
@@ -74,9 +76,42 @@ class _WeightScreenState extends ConsumerState<WeightScreen> {
     return animalsAsync.when(
       data: (animals) {
         final animalMap = {for (var a in animals) a.id: a};
-        return RefreshIndicator(
-          onRefresh: () => ref.read(paginatedWeightProvider.notifier).refresh(),
-          child: _buildRecordsList(context, state, animalMap),
+
+        // Filter records based on search query
+        final filteredRecords = _searchQuery.isEmpty
+            ? state.records
+            : state.records.where((record) {
+                final query = _searchQuery.toLowerCase();
+                final animal = animalMap[record.animalId];
+                return (animal?.tagId.toLowerCase().contains(query) ?? false) ||
+                    (animal?.name?.toLowerCase().contains(query) ?? false) ||
+                    record.weight.toString().contains(query) ||
+                    (record.notes?.toLowerCase().contains(query) ?? false);
+              }).toList();
+
+        final filteredState = state.copyWith(records: filteredRecords);
+
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: SearchBarWidget(
+                hintText: 'Search by animal tag, name, weight, or notes...',
+                onChanged: (query) {
+                  setState(() {
+                    _searchQuery = query;
+                  });
+                },
+              ),
+            ),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: () =>
+                    ref.read(paginatedWeightProvider.notifier).refresh(),
+                child: _buildRecordsList(context, filteredState, animalMap),
+              ),
+            ),
+          ],
         );
       },
       loading: () => const Center(child: CircularProgressIndicator()),
