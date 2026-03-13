@@ -417,7 +417,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           icon: Icons.psychology,
           color: const Color(0xFF6366F1),
           onTap: () => coordinator.push(MLRoute()),
-          badge: 'In Progress',
         ),
         minRole: UserRole.manager, // Manager, owner only
       ),

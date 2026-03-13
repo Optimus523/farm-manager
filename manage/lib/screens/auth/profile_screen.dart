@@ -3137,7 +3137,7 @@ class _ProfileSection extends StatelessWidget {
                   ),
                 ),
                 const Spacer(),
-                if (trailing != null) trailing!,
+                ?trailing,
               ],
             ),
           ),

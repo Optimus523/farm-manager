@@ -318,6 +318,7 @@ class MemoryService {
               'container_tag': containerTag,
               'content': content,
               'memory_type': memoryType,
+              // ignore: use_null_aware_elements - not applicable for map entries
               if (category != null) 'category': category,
             }),
           )

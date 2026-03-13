@@ -164,7 +164,11 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
 
   @override
   MLAnalyticsState build() {
-    print('[ML] MLService initialized with baseUrl: ${_mlService.baseUrl}');
+    if (kDebugMode) {
+      debugPrint(
+        '[ML] MLService initialized with baseUrl: ${_mlService.baseUrl}',
+      );
+    }
     // Schedule data loading after build completes to avoid circular dependency
     Future.microtask(() => loadAnalytics());
     return const MLAnalyticsState(isLoading: true);
@@ -181,13 +185,15 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
           error: 'Connection timeout',
         ),
       );
-      print(
-        '[ML] Health check result: status=${health.status}, healthy=${health.isHealthy}, error=${health.error}',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[ML] Health check result: status=${health.status}, healthy=${health.isHealthy}, error=${health.error}',
+        );
+      }
       state = state.copyWith(isConnected: health.isHealthy);
       return health.isHealthy;
     } catch (e) {
-      print('[ML] checkConnection exception: $e');
+      if (kDebugMode) debugPrint('[ML] checkConnection exception: $e');
       state = state.copyWith(isConnected: false);
       return false;
     }
@@ -200,21 +206,21 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
     try {
       final isConnected = await checkConnection();
       if (kDebugMode) {
-        print('[ML] Connection check: $isConnected');
+        debugPrint('[ML] Connection check: $isConnected');
       }
 
       if (isConnected) {
         try {
-          print('[ML] Calling _loadFromAPI...');
+          if (kDebugMode) debugPrint('[ML] Calling _loadFromAPI...');
           await _loadFromAPI().timeout(const Duration(seconds: 30));
-          print('[ML] _loadFromAPI completed');
+          if (kDebugMode) debugPrint('[ML] _loadFromAPI completed');
         } on TimeoutException {
-          print('[ML] _loadFromAPI timed out');
+          if (kDebugMode) debugPrint('[ML] _loadFromAPI timed out');
           state = state.copyWith(
             error: 'Connection timed out. Please check your ML API server.',
           );
         } catch (e) {
-          print('[ML] _loadFromAPI error: $e');
+          if (kDebugMode) debugPrint('[ML] _loadFromAPI error: $e');
           rethrow;
         }
       } else {
@@ -224,8 +230,10 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
         );
       }
     } catch (e, st) {
-      print('[ML] loadAnalytics exception: $e');
-      print('[ML] Stack trace: $st');
+      if (kDebugMode) {
+        debugPrint('[ML] loadAnalytics exception: $e');
+        debugPrint('[ML] Stack trace: $st');
+      }
       state = state.copyWith(error: e.toString());
     } finally {
       state = state.copyWith(isLoading: false);
@@ -235,11 +243,13 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
   /// Load data from the live API
   Future<void> _loadFromAPI() async {
     try {
-      print('[ML] _loadFromAPI starting...');
+      if (kDebugMode) debugPrint('[ML] _loadFromAPI starting...');
       final modelInfo = await _mlService.getModelInfo();
-      print(
-        '[ML] Got model info: status=${modelInfo.status}, samples=${modelInfo.samples}',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[ML] Got model info: status=${modelInfo.status}, samples=${modelInfo.samples}',
+        );
+      }
 
       final testMetrics = modelInfo.testMetrics;
       state = state.copyWith(
@@ -255,35 +265,47 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
         ),
       );
 
-      print('[ML] Fetching animals...');
+      if (kDebugMode) debugPrint('[ML] Fetching animals...');
       final animals = await ref.read(animalsProvider.future);
-      print('[ML] Got ${animals.length} animals');
+      if (kDebugMode) debugPrint('[ML] Got ${animals.length} animals');
 
-      print('[ML] Fetching weight records...');
+      if (kDebugMode) debugPrint('[ML] Fetching weight records...');
       List<WeightRecord> weightRecords;
       try {
         weightRecords = await ref
             .read(weightRecordsProvider.future)
             .timeout(const Duration(seconds: 15));
-        print('[ML] Got ${weightRecords.length} weight records from stream');
+        if (kDebugMode) {
+          debugPrint(
+            '[ML] Got ${weightRecords.length} weight records from stream',
+          );
+        }
       } on TimeoutException {
         // Fall back to direct query
-        print('[ML] Stream timeout, falling back to direct query...');
+        if (kDebugMode) {
+          debugPrint('[ML] Stream timeout, falling back to direct query...');
+        }
         final farmId = ref.read(activeFarmIdProvider);
         if (farmId == null) {
-          print('[ML] No active farm, returning empty weight records');
+          if (kDebugMode) {
+            debugPrint('[ML] No active farm, returning empty weight records');
+          }
           weightRecords = [];
         } else {
           final weightRepo = ref.read(weightRepositoryProvider);
           weightRecords = await weightRepo.getWeightRecords(farmId);
-          print(
-            '[ML] Got ${weightRecords.length} weight records from direct query',
-          );
+          if (kDebugMode) {
+            debugPrint(
+              '[ML] Got ${weightRecords.length} weight records from direct query',
+            );
+          }
         }
       }
 
       if (animals.isEmpty) {
-        print('[ML] No animals found, returning empty state');
+        if (kDebugMode) {
+          debugPrint('[ML] No animals found, returning empty state');
+        }
         // No animals yet - show empty state with API connection
         state = state.copyWith(
           predictions: [],
@@ -302,9 +324,11 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
             .putIfAbsent(record.animalId, () => [])
             .add(record);
       }
-      print(
-        '[ML] Animals with weight records: ${weightRecordsByAnimal.length}',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[ML] Animals with weight records: ${weightRecordsByAnimal.length}',
+        );
+      }
 
       // Compute predictions for each animal using the ML API
       final predictions = <WeightPrediction>[];
@@ -328,9 +352,11 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
         try {
           // Compute features and predict using live API
           final features = _buildFeatures(animal, animalWeightRecords);
-          print(
-            '[ML] Predicting for ${animal.tagId} with ${features.length} features',
-          );
+          if (kDebugMode) {
+            debugPrint(
+              '[ML] Predicting for ${animal.tagId} with ${features.length} features',
+            );
+          }
 
           // Cache features for later SHAP explanation use
           _animalFeatures[animal.id] = features;
@@ -439,14 +465,18 @@ class MLAnalyticsNotifier extends Notifier<MLAnalyticsState> {
           }
         } catch (e) {
           // Skip animals that fail prediction
-          print('[ML] Prediction FAILED for ${animal.tagId}: $e');
+          if (kDebugMode) {
+            debugPrint('[ML] Prediction FAILED for ${animal.tagId}: $e');
+          }
           continue;
         }
       }
 
-      print(
-        '[ML] Final: ${predictions.length} predictions, ${healthScores.length} health scores, $skippedNoWeight skipped (no weight)',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[ML] Final: ${predictions.length} predictions, ${healthScores.length} health scores, $skippedNoWeight skipped (no weight)',
+        );
+      }
 
       // Generate summaries and insights
       final weightSummary = _computeWeightSummary(predictions);
