@@ -1,0 +1,28 @@
+# Web Framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+
+# Database & Supabase
+supabase>=2.10.0
+asyncpg>=0.30.0
+sqlalchemy>=2.0.0
+
+# ML Core (CPU-friendly)
+numpy>=2.0.0,<2.4
+pandas>=2.2.0
+scikit-learn>=1.5.0
+lightgbm>=4.5.0
+
+# ML Ops & Experiment Tracking
+mlflow>=2.18.0
+optuna>=4.1.0
+
+# Feature Engineering
+scipy>=1.14.0
+
+# Utilities
+python-dotenv>=1.0.0
+httpx>=0.28.0
+tenacity>=9.0.0
