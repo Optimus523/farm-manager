@@ -6,7 +6,7 @@ pydantic-settings>=2.6.0
 
 # Database & Supabase
 supabase>=2.10.0
-asyncpg>=0.30.0Allow
+asyncpg>=0.30.0
 sqlalchemy>=2.0.0
 
 # ML Core (CPU-friendly)
